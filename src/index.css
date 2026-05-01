@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: #070818;
+  color: #e2e8f0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- React Flow overrides ---- */
+/* Background is controlled by canvasBg in store — keep RF layer transparent */
+.react-flow__background { background-color: transparent !important; }
+
+.react-flow__edge-path {
+  stroke: rgba(99,102,241,0.35);
+  stroke-width: 2;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #6366f1;
+  stroke-width: 2.5;
+}
+.react-flow__edge-path:hover { stroke: rgba(99,102,241,0.7); }
+
+.react-flow__connection-path { stroke: #6366f1; stroke-width: 2; }
+
+.react-flow__controls {
+  background: #111228;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+.react-flow__controls-button {
+  background: #111228;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  color: #94a3b8;
+  fill: #94a3b8;
+  width: 28px;
+  height: 28px;
+}
+.react-flow__controls-button:hover {
+  background: #1a1b2e;
+  color: #e2e8f0;
+  fill: #e2e8f0;
+}
+
+.react-flow__minimap {
+  background: #111228;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.react-flow__minimap-mask { fill: rgba(7,8,24,0.7); }
+
+/* Handles — always round, slightly visible, grow on hover */
+.react-flow__handle {
+  width: 12px !important;
+  height: 12px !important;
+  border-radius: 50% !important;
+  border: 2.5px solid #070818 !important;
+  opacity: 0.5;
+  transition: transform 0.15s, opacity 0.15s, box-shadow 0.15s !important;
+  z-index: 10;
+  cursor: grab !important;
+}
+/* Remove crosshair cursor from connectionindicator — use grab instead */
+.react-flow__handle.connectionindicator {
+  cursor: grab !important;
+}
+.react-flow__node:hover .react-flow__handle {
+  opacity: 0.9;
+}
+.react-flow__handle:hover {
+  transform: scale(1.8) !important;
+  opacity: 1 !important;
+  cursor: grabbing !important;
+}
+/* While dragging a connection line — target handles glow */
+.react-flow__handle-connecting {
+  opacity: 1 !important;
+  transform: scale(1.9) !important;
+}
+.react-flow__handle-valid {
+  opacity: 1 !important;
+  transform: scale(2.2) !important;
+  box-shadow: 0 0 0 4px rgba(99,102,241,0.4) !important;
+}
+
+/* Arrow indicators on handles */
+.react-flow__handle-top::after {
+  content: '▲';
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 7px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+.react-flow__handle-bottom::after {
+  content: '▼';
+  position: absolute;
+  bottom: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 7px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+.react-flow__node:hover .react-flow__handle-top::after,
+.react-flow__node:hover .react-flow__handle-bottom::after {
+  opacity: 0.85;
+}
+
+/* Connection line while dragging */
+.react-flow__connectionline path {
+  stroke: #6366f1 !important;
+  stroke-width: 2.5 !important;
+  stroke-dasharray: 6 3 !important;
+}
+
+.react-flow__node.selected > div { outline: none !important; }
+
+/* Show the "drag hint" label under source handle on node hover */
+.tsm-node-wrap:hover .tsm-drag-hint {
+  opacity: 1 !important;
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+
+/* ---- Utilities ---- */
+.glass {
+  background: rgba(17,18,40,0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.07);
+}
+
+.glow-indigo { box-shadow: 0 0 20px rgba(99,102,241,0.25); }
+.glow-blue   { box-shadow: 0 0 20px rgba(59,130,246,0.25); }
+.glow-green  { box-shadow: 0 0 20px rgba(34,197,94,0.25); }
+
+.animate-spin-slow { animation: spin 4s linear infinite; }
+
+.drag-handle-node { cursor: grab; }
+.drag-handle-node:active { cursor: grabbing; }
+
+/* input / textarea reset */
+input, textarea, select {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  color: #e2e8f0;
+  outline: none;
+  transition: border-color 0.2s;
+  font-family: inherit;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: rgba(99,102,241,0.5);
+  background: rgba(99,102,241,0.05);
+}
+input::placeholder, textarea::placeholder { color: #4a5568; }
+
+select option { background: #1a1b2e; }
+
+/* Tooltip */
+.tooltip {
+  position: relative;
+}
+.tooltip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1b2e;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #e2e8f0;
+  font-size: 11px;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 6px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  z-index: 100;
+}
+.tooltip:hover::after { opacity: 1; }

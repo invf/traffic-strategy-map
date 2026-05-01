@@ -1,0 +1,848 @@
+// ─── Node type configs ───────────────────────────────────────────────────────
+export const NODE_TYPES_CONFIG = {
+  idea: {
+    label: 'Idea',
+    color: '#8b5cf6',
+    bgOpacity: '18',
+    borderOpacity: '50',
+    icon: 'Lightbulb',
+    description: 'Initial concept or opportunity',
+  },
+  channel: {
+    label: 'Channel',
+    color: '#3b82f6',
+    bgOpacity: '18',
+    borderOpacity: '50',
+    icon: 'Radio',
+    description: 'Traffic acquisition channel',
+  },
+  hypothesis: {
+    label: 'Hypothesis',
+    color: '#f59e0b',
+    bgOpacity: '18',
+    borderOpacity: '50',
+    icon: 'FlaskConical',
+    description: 'Assumption to validate',
+  },
+  action: {
+    label: 'Action',
+    color: '#22c55e',
+    bgOpacity: '18',
+    borderOpacity: '50',
+    icon: 'Zap',
+    description: 'Concrete marketing step',
+  },
+  test: {
+    label: 'Test',
+    color: '#f97316',
+    bgOpacity: '18',
+    borderOpacity: '50',
+    icon: 'TestTube',
+    description: 'A/B test or experiment',
+  },
+  result: {
+    label: 'Result',
+    color: '#06b6d4',
+    bgOpacity: '18',
+    borderOpacity: '50',
+    icon: 'BarChart2',
+    description: 'Outcome or measured metric',
+  },
+  nextStep: {
+    label: 'Next Step',
+    color: '#ec4899',
+    bgOpacity: '18',
+    borderOpacity: '50',
+    icon: 'ArrowRightCircle',
+    description: 'Future action or milestone',
+  },
+};
+
+export const STATUS_CONFIG = {
+  todo:        { label: 'To Do',       color: '#94a3b8', bg: 'rgba(148,163,184,0.15)' },
+  'in-progress':{ label: 'In Progress', color: '#3b82f6', bg: 'rgba(59,130,246,0.18)'  },
+  done:        { label: 'Done',        color: '#22c55e', bg: 'rgba(34,197,94,0.18)'   },
+  blocked:     { label: 'Blocked',     color: '#ef4444', bg: 'rgba(239,68,68,0.18)'   },
+};
+
+export const PRIORITY_CONFIG = {
+  low:    { label: 'Low',    color: '#94a3b8', dot: '●' },
+  medium: { label: 'Medium', color: '#f59e0b', dot: '●' },
+  high:   { label: 'High',   color: '#ef4444', dot: '●' },
+};
+
+// ─── Mock Traffic Sources ─────────────────────────────────────────────────────
+export const MOCK_TRAFFIC_SOURCES = [
+  {
+    id: 'ts1',
+    platform: 'Google Ads (Search)',
+    category: 'Paid Search',
+    url: 'https://ads.google.com',
+    estimatedTraffic: '8.5B searches/day',
+    countries: ['US', 'GB', 'IN', 'CA', 'AU', 'DE'],
+    trafficSources: ['Search intent', 'Display', 'Shopping', 'YouTube'],
+    keywords: ['ppc', 'sem', 'search ads', 'google ads', 'intent marketing'],
+    audience: 'All demographics, high-intent searchers, B2B & B2C',
+    difficulty: 'Medium',
+    potential: 'Very High',
+    recommendedAction: 'Start with exact-match, high-intent keywords. Set up conversion tracking in GA4 first. Budget $500–2K/month for testing phase.',
+    icon: '🔍',
+    color: '#4285F4',
+    tags: ['paid', 'intent-based', 'scalable'],
+    researchLinks: [
+      { label: 'Google Ads Transparency', url: 'https://adstransparency.google.com' },
+      { label: 'Keyword Planner', url: 'https://ads.google.com/home/tools/keyword-planner/' },
+    ]
+  },
+  {
+    id: 'ts2',
+    platform: 'Meta Ads (Facebook / Instagram)',
+    category: 'Paid Social',
+    url: 'https://business.meta.com',
+    estimatedTraffic: '3.2B monthly active users',
+    countries: ['US', 'IN', 'BR', 'ID', 'PH', 'MX'],
+    trafficSources: ['Feed', 'Stories', 'Reels', 'Messenger', 'Audience Network'],
+    keywords: ['facebook ads', 'instagram ads', 'social advertising', 'lookalike audiences'],
+    audience: 'B2C, interest & behaviour targeting, lookalike audiences, retargeting',
+    difficulty: 'Medium',
+    potential: 'High',
+    recommendedAction: 'Use Meta Ads Library to research competitor creatives. Start with Advantage+ Shopping for e-commerce or Lead Ads for SaaS.',
+    icon: '📘',
+    color: '#1877F2',
+    tags: ['paid', 'social', 'visual', 'retargeting'],
+    researchLinks: [
+      { label: 'Meta Ads Library', url: 'https://www.facebook.com/ads/library' },
+      { label: 'Meta Business', url: 'https://business.meta.com' },
+    ]
+  },
+  {
+    id: 'ts3',
+    platform: 'YouTube (Organic + Ads)',
+    category: 'Video',
+    url: 'https://youtube.com',
+    estimatedTraffic: '2.5B logged-in users/month',
+    countries: ['US', 'IN', 'BR', 'JP', 'RU', 'ID'],
+    trafficSources: ['Search', 'Suggested', 'Browse', 'YouTube Ads'],
+    keywords: ['youtube seo', 'video marketing', 'tutorials', 'product reviews', 'youtube ads'],
+    audience: 'All age groups; tutorials, reviews, entertainment, how-to content',
+    difficulty: 'Medium',
+    potential: 'Very High',
+    recommendedAction: 'Create "vs competitor" and "how to" videos targeting product keywords. Run YouTube TrueView In-Stream ads for retargeting.',
+    icon: '▶️',
+    color: '#FF0000',
+    tags: ['video', 'organic', 'paid', 'viral'],
+    researchLinks: [
+      { label: 'YouTube Studio', url: 'https://studio.youtube.com' },
+      { label: 'Google Trends', url: 'https://trends.google.com' },
+    ]
+  },
+  {
+    id: 'ts4',
+    platform: 'Reddit',
+    category: 'Community',
+    url: 'https://reddit.com',
+    estimatedTraffic: '1.8B visits/month',
+    countries: ['US', 'GB', 'CA', 'AU', 'DE'],
+    trafficSources: ['Direct', 'Google Search', 'Reddit Ads'],
+    keywords: ['community marketing', 'reddit ads', 'subreddit', 'authentic promotion'],
+    audience: 'Tech-savvy, sceptical, community-driven; Millennials & Gen-Z',
+    difficulty: 'High',
+    potential: 'High',
+    recommendedAction: 'Find 5–10 relevant subreddits. Contribute genuine value for 30 days before soft promotion. Try Reddit Ads for precise subreddit targeting.',
+    icon: '🔴',
+    color: '#FF4500',
+    tags: ['community', 'organic', 'trust', 'long-term'],
+    researchLinks: [
+      { label: 'Reddit Ads', url: 'https://ads.reddit.com' },
+      { label: 'Reddit Search', url: 'https://reddit.com/search' },
+    ]
+  },
+  {
+    id: 'ts5',
+    platform: 'Product Hunt',
+    category: 'Launch Platform',
+    url: 'https://producthunt.com',
+    estimatedTraffic: '5M+ visits/month',
+    countries: ['US', 'GB', 'IN', 'DE', 'FR'],
+    trafficSources: ['Direct', 'Email Newsletter', 'Social'],
+    keywords: ['product launch', 'startup exposure', 'early adopters', 'upvotes'],
+    audience: 'Early adopters, tech enthusiasts, investors, product managers, journalists',
+    difficulty: 'High',
+    potential: 'Very High',
+    recommendedAction: 'Build your hunter network 4–8 weeks before launch. Post Tuesday 12:01 AM PST. Prepare assets: logo, tagline, demo GIF, launch video.',
+    icon: '🐱',
+    color: '#DA552F',
+    tags: ['launch', 'community', 'viral', 'one-time'],
+    researchLinks: [
+      { label: 'Product Hunt', url: 'https://producthunt.com' },
+      { label: 'PH Ship', url: 'https://producthunt.com/ship' },
+    ]
+  },
+  {
+    id: 'ts6',
+    platform: 'Twitter / X (Organic)',
+    category: 'Social Media',
+    url: 'https://x.com',
+    estimatedTraffic: '500M+ registered users',
+    countries: ['US', 'JP', 'GB', 'IN', 'BR'],
+    trafficSources: ['Feed', 'Search', 'X Ads'],
+    keywords: ['twitter marketing', 'build in public', 'x threads', 'indiehackers', 'founder brand'],
+    audience: 'Founders, developers, marketers, journalists, B2B decision-makers, tech early adopters',
+    difficulty: 'Medium',
+    potential: 'Medium',
+    recommendedAction: 'Build a personal-brand account. Post daily: product updates, insights, behind-the-scenes. Write threads explaining your niche expertise.',
+    icon: '🐦',
+    color: '#1DA1F2',
+    tags: ['social', 'organic', 'founder', 'community'],
+    researchLinks: [
+      { label: 'X Ads', url: 'https://ads.x.com' },
+      { label: 'X Analytics', url: 'https://analytics.x.com' },
+    ]
+  },
+  {
+    id: 'ts7',
+    platform: 'LinkedIn (Organic + Ads)',
+    category: 'Professional Network',
+    url: 'https://linkedin.com',
+    estimatedTraffic: '950M+ members',
+    countries: ['US', 'IN', 'BR', 'GB', 'NL', 'CA'],
+    trafficSources: ['Feed', 'Search', 'InMail', 'LinkedIn Ads'],
+    keywords: ['linkedin ads', 'b2b marketing', 'thought leadership', 'linkedin content'],
+    audience: 'B2B buyers, decision-makers, professionals, C-suite, HR, recruiters',
+    difficulty: 'Medium',
+    potential: 'High',
+    recommendedAction: 'Perfect for B2B SaaS. Use Sponsored Content targeting by job title + company size. Publish thought-leadership articles to build organic reach.',
+    icon: '💼',
+    color: '#0A66C2',
+    tags: ['b2b', 'paid', 'professional', 'intent'],
+    researchLinks: [
+      { label: 'LinkedIn Ads', url: 'https://business.linkedin.com/marketing-solutions' },
+      { label: 'LinkedIn Analytics', url: 'https://linkedin.com/analytics' },
+    ]
+  },
+  {
+    id: 'ts8',
+    platform: 'TikTok (Organic + Ads)',
+    category: 'Short Video',
+    url: 'https://tiktok.com',
+    estimatedTraffic: '1.7B+ users',
+    countries: ['US', 'ID', 'IN', 'BR', 'MX', 'UK'],
+    trafficSources: ['For You Page', 'Search', 'TikTok Ads'],
+    keywords: ['tiktok ads', 'short video', 'viral content', 'gen-z marketing', 'ugc'],
+    audience: 'Gen-Z, Millennials, entertainment seekers, trend-followers; broad consumer demographic',
+    difficulty: 'Low–Medium',
+    potential: 'Very High',
+    recommendedAction: 'Create 30–60s product demo videos with trending audio. UGC-style converts best. Run TikTok Spark Ads to boost organic posts.',
+    icon: '🎵',
+    color: '#69C9D0',
+    tags: ['viral', 'video', 'gen-z', 'ugc'],
+    researchLinks: [
+      { label: 'TikTok Ads Manager', url: 'https://ads.tiktok.com' },
+      { label: 'TikTok Creative Center', url: 'https://ads.tiktok.com/business/creativecenter' },
+    ]
+  },
+  {
+    id: 'ts9',
+    platform: 'Indie Hackers',
+    category: 'Founder Community',
+    url: 'https://indiehackers.com',
+    estimatedTraffic: '1M+ monthly visits',
+    countries: ['US', 'GB', 'IN', 'CA', 'AU'],
+    trafficSources: ['Direct', 'Newsletter', 'Social'],
+    keywords: ['bootstrapped saas', 'indie hacker', 'build in public', 'mrr milestone'],
+    audience: 'Bootstrapped founders, SaaS builders, solopreneurs, product enthusiasts',
+    difficulty: 'Low',
+    potential: 'Medium',
+    recommendedAction: 'Share genuine revenue milestones and lessons. Write interview posts. Answer questions in the forum. Authentic storytelling wins.',
+    icon: '💡',
+    color: '#0E2150',
+    tags: ['community', 'founders', 'free', 'authentic'],
+    researchLinks: [
+      { label: 'Indie Hackers', url: 'https://indiehackers.com' },
+    ]
+  },
+  {
+    id: 'ts10',
+    platform: 'AppSumo',
+    category: 'Deal Marketplace',
+    url: 'https://appsumo.com',
+    estimatedTraffic: '2M+ email subscribers',
+    countries: ['US', 'GB', 'IN', 'AU', 'CA'],
+    trafficSources: ['Email', 'Direct', 'Affiliate'],
+    keywords: ['lifetime deal', 'software deal', 'appsumo marketplace', 'saas ltd'],
+    audience: 'SMBs, entrepreneurs, deal hunters, early adopters, freelancers',
+    difficulty: 'Medium',
+    potential: 'Very High',
+    recommendedAction: 'Apply to AppSumo Marketplace with a Lifetime Deal. Prepare to offer 60–90% discount. Great for initial traction and reviews.',
+    icon: '🦁',
+    color: '#FF5533',
+    tags: ['deals', 'launch', 'email', 'revenue'],
+    researchLinks: [
+      { label: 'AppSumo Partner', url: 'https://sell.appsumo.com' },
+    ]
+  },
+  {
+    id: 'ts11',
+    platform: 'SEO / Google Organic',
+    category: 'Organic Search',
+    url: 'https://google.com',
+    estimatedTraffic: '8.5B searches/day (total)',
+    countries: ['Global'],
+    trafficSources: ['Organic Search', 'Featured Snippets', 'Google Discover'],
+    keywords: ['seo', 'content marketing', 'keyword research', 'long-tail seo', 'link building'],
+    audience: 'Intent-based searchers at every funnel stage, all demographics',
+    difficulty: 'High',
+    potential: 'Very High',
+    recommendedAction: 'Target long-tail (3–5 word) keywords with <1K monthly searches to start. Publish comprehensive guides (2 000+ words). Build backlinks via HARO and guest posts.',
+    icon: '🌐',
+    color: '#34A853',
+    tags: ['organic', 'long-term', 'seo', 'compound'],
+    researchLinks: [
+      { label: 'Google Search Console', url: 'https://search.google.com/search-console' },
+      { label: 'Ahrefs Webmaster Tools', url: 'https://ahrefs.com/webmaster-tools' },
+    ]
+  },
+  {
+    id: 'ts12',
+    platform: 'Chrome Web Store',
+    category: 'App Marketplace',
+    url: 'https://chromewebstore.google.com',
+    estimatedTraffic: '2B+ Chrome users',
+    countries: ['Global'],
+    trafficSources: ['In-store Search', 'Featured', 'External Links'],
+    keywords: ['chrome extension', 'browser extension', 'cws', 'extension marketing'],
+    audience: 'Knowledge workers, developers, productivity enthusiasts',
+    difficulty: 'Low',
+    potential: 'High',
+    recommendedAction: 'Optimise store listing with keyword-rich description. Get reviews through in-app prompts. Apply for CWS Featured editorial placement.',
+    icon: '🧩',
+    color: '#4285F4',
+    tags: ['extension', 'organic', 'store', 'b2c'],
+    researchLinks: [
+      { label: 'CWS Developer Dashboard', url: 'https://chrome.google.com/webstore/devconsole' },
+    ]
+  },
+  {
+    id: 'ts13',
+    platform: 'Hacker News',
+    category: 'Tech Community',
+    url: 'https://news.ycombinator.com',
+    estimatedTraffic: '5M+ monthly visits',
+    countries: ['US', 'GB', 'IN', 'DE', 'CA'],
+    trafficSources: ['Direct'],
+    keywords: ['show hn', 'ask hn', 'hacker news launch', 'hn viral', 'developer marketing'],
+    audience: 'Developers, technical founders, VCs, early adopters, journalists',
+    difficulty: 'High',
+    potential: 'Very High',
+    recommendedAction: '"Show HN: [Product] — [one-line value prop]". Post Monday–Thursday, 9–11 AM ET. Respond to every comment within the first hour.',
+    icon: '🟠',
+    color: '#FF6600',
+    tags: ['tech', 'community', 'viral', 'developer'],
+    researchLinks: [
+      { label: 'Hacker News', url: 'https://news.ycombinator.com' },
+      { label: 'HN Algolia Search', url: 'https://hn.algolia.com' },
+    ]
+  },
+  {
+    id: 'ts14',
+    platform: 'Newsletter Sponsorships',
+    category: 'Email / Sponsorship',
+    url: '',
+    estimatedTraffic: 'Varies (1K–500K subs)',
+    countries: ['US', 'GB', 'CA', 'AU'],
+    trafficSources: ['Email', 'Curated Digest'],
+    keywords: ['newsletter sponsorship', 'sponsored content', 'email marketing', 'niche newsletter'],
+    audience: 'Highly engaged niche readers; typically professionals',
+    difficulty: 'Medium',
+    potential: 'High',
+    recommendedAction: 'Find newsletters in your niche on Beehiiv, Substack, or SparkLoop. Start with micro-newsletters ($150–500/issue). Track UTM links carefully.',
+    icon: '📧',
+    color: '#7C3AED',
+    tags: ['paid', 'niche', 'high-quality', 'email'],
+    researchLinks: [
+      { label: 'SparkLoop Directory', url: 'https://sparktoro.com' },
+      { label: 'Beehiiv Ads', url: 'https://beehiiv.com/advertise' },
+    ]
+  },
+  {
+    id: 'ts15',
+    platform: 'SimilarWeb (Research)',
+    category: 'Research Tool',
+    url: 'https://similarweb.com',
+    estimatedTraffic: 'Research only',
+    countries: ['Global'],
+    trafficSources: ['Research'],
+    keywords: ['competitor traffic', 'traffic analysis', 'market intelligence'],
+    audience: 'Marketers, analysts, growth teams',
+    difficulty: 'Low',
+    potential: 'High (as research)',
+    recommendedAction: 'Use to spy on competitors traffic sources, top referrers, and keyword mix. Export data to build your channel strategy.',
+    icon: '📊',
+    color: '#FF6B35',
+    tags: ['research', 'competitive-intel', 'free-tier'],
+    researchLinks: [
+      { label: 'SimilarWeb', url: 'https://similarweb.com' },
+    ]
+  },
+  {
+    id: 'ts16',
+    platform: 'AlternativeTo',
+    category: 'Comparison Directory',
+    url: 'https://alternativeto.net',
+    estimatedTraffic: '5M+ visits/month',
+    countries: ['US', 'GB', 'DE', 'IN', 'BR', 'CA', 'FR'],
+    trafficSources: ['Organic Search', 'Direct', 'Referral'],
+    keywords: ['software alternatives', 'app comparison', 'competitor alternative', 'best tool for', 'vs competitor'],
+    audience: 'High-intent buyers actively comparing tools; developers, tech leads, SMB owners',
+    difficulty: 'Low',
+    potential: 'Very High',
+    recommendedAction: 'Claim or submit your product listing on AlternativeTo. Add a detailed description, screenshots, and tags. Encourage existing users to add your tool as an alternative to competitors. People landing here are in active buying mode — add your product page URL as the primary link.',
+    icon: '🔀',
+    color: '#10B981',
+    tags: ['organic', 'high-intent', 'comparison', 'free', 'seo'],
+    researchLinks: [
+      { label: 'AlternativeTo', url: 'https://alternativeto.net' },
+      { label: 'Submit your app', url: 'https://alternativeto.net/add-software/' },
+    ]
+  },
+];
+
+// ─── AI Suggestion Templates ──────────────────────────────────────────────────
+export const generateAISuggestions = (productInfo) => {
+  const name = productInfo.name || 'your product';
+  const audience = productInfo.audience || 'your target audience';
+  const goal = productInfo.goal || 'traffic';
+
+  return {
+    channels: [
+      {
+        channel: 'SEO Content Marketing',
+        priority: 'High',
+        rationale: `Long-form SEO content compounds over time — ideal for a ${goal} goal because organic visitors have high intent and zero incremental cost.`,
+        timeline: '3–6 months to see results',
+        budget: 'Low–Medium',
+        actions: [
+          `Research 50+ long-tail keywords around "${name}" and related pain points`,
+          'Publish 2 comprehensive guides per week (2 000+ words each)',
+          'Build 5 quality backlinks/month via HARO and guest posting',
+        ],
+      },
+      {
+        channel: 'Community Marketing (Reddit / IH / Discord)',
+        priority: 'High',
+        rationale: `${audience} trust peer recommendations far more than ads. Authentic community presence drives high-LTV users.`,
+        timeline: '1–3 months',
+        budget: 'Low',
+        actions: [
+          `Find 10 subreddits and Discord servers where ${audience} hang out`,
+          'Contribute genuine value for 30 days before any promotion',
+          'Share case studies, "lessons learned" posts, and milestone updates',
+        ],
+      },
+      {
+        channel: 'Paid Search (Google Ads)',
+        priority: 'Medium',
+        rationale: 'Paid search captures demand at the moment of intent. Good for fast learning about what messaging converts.',
+        timeline: '2–4 weeks to optimise',
+        budget: 'Medium–High',
+        actions: [
+          'Start with $500–1 000/month test budget targeting competitor brand terms',
+          'Create dedicated landing pages for each ad group',
+          'A/B test 3 headlines and 2 descriptions simultaneously',
+        ],
+      },
+      {
+        channel: 'Influencer / Creator Partnerships',
+        priority: 'Medium',
+        rationale: `Micro-influencers (10K–100K followers) in your niche deliver 60% higher engagement than mega-influencers.`,
+        timeline: '4–8 weeks to set up',
+        budget: 'Medium',
+        actions: [
+          `Find 20 micro-influencers whose audience overlaps with ${audience}`,
+          'Offer revenue-share or free access in exchange for honest review',
+          'Repurpose influencer content as paid social ads (Spark Ads, Collab Posts)',
+        ],
+      },
+    ],
+    contentIdeas: [
+      {
+        type: 'Blog Post',
+        title: `The Complete Guide to [Main Pain Point] for ${audience}`,
+        platform: 'Company Blog / Medium',
+        format: 'Long-form guide, 3 000+ words, optimised for SEO',
+      },
+      {
+        type: 'Twitter / X Thread',
+        title: `10 lessons I learned growing ${name} from 0 to 1 000 users`,
+        platform: 'X (Twitter)',
+        format: 'Thread, 12–15 tweets, strong hook in tweet 1',
+      },
+      {
+        type: 'Reddit Post',
+        title: `I built a tool that solves [problem]. Here's what I learned about actually getting users`,
+        platform: 'r/entrepreneur, r/startups + niche subs',
+        format: 'Authentic story post with data and honest insights',
+      },
+      {
+        type: 'YouTube Short / TikTok',
+        title: `Watch ${name} save 2 hours in 30 seconds`,
+        platform: 'YouTube Shorts, TikTok, Instagram Reels',
+        format: 'Screen-share demo, 30–45 s, trending audio, text overlay',
+      },
+      {
+        type: 'Product Hunt Launch',
+        title: `${name} — [Tagline under 60 characters]`,
+        platform: 'Product Hunt',
+        format: 'Full launch: video, screenshots, Maker comment, rapid replies',
+      },
+    ],
+    weaknesses: [
+      'No clear channel prioritisation — spreading effort too thinly across all channels at once',
+      'Missing email capture / lead magnet in the conversion funnel',
+      'No retargeting strategy for visitors who leave without converting',
+      'Analytics setup not confirmed — decisions may be made on incomplete data',
+      'Competitor content gap analysis not yet completed',
+    ],
+    hypotheses: [
+      {
+        hypothesis: `If we target ${audience} on LinkedIn with a free-trial offer, sign-up rate will exceed 4%`,
+        experiment: `LinkedIn Ads campaign, $500 budget, 2-week run, CTA → free trial landing page`,
+        metric: 'Sign-up CVR, CAC, trial-to-paid rate',
+      },
+      {
+        hypothesis: `A "how we built ${name}" case study on IH + HN simultaneously will drive 500+ sign-ups`,
+        experiment: 'Post on Tuesday 9 AM ET, use unique UTM per platform, reply to all comments within 1 hour',
+        metric: 'Sign-ups per UTM source, bounce rate, MRR attributed',
+      },
+      {
+        hypothesis: 'Adding a product demo video above the fold increases trial sign-ups by 25%',
+        experiment: 'A/B test current homepage vs version with auto-play muted demo video (2-week test)',
+        metric: 'CTA click-rate, sign-up CVR, scroll depth',
+      },
+    ],
+    adMessages: [
+      {
+        type: 'Pain Point',
+        headline: `Stop Losing Time to [Problem]. ${name} Fixes It Automatically.`,
+        body: `Join 1 000+ ${audience} who automated [task] with ${name}. Free trial — no credit card.`,
+        cta: 'Start Free Trial',
+      },
+      {
+        type: 'Social Proof',
+        headline: `"${name} saved our team 10 hours a week" — [Customer Title]`,
+        body: `See why ${audience} choose ${name} over [Competitor]. 14-day free trial included.`,
+        cta: 'See How It Works',
+      },
+      {
+        type: 'FOMO / Urgency',
+        headline: `Your Competitors Are Already Using ${name}. Are You?`,
+        body: `Don't fall behind. ${name} gives ${audience} an unfair advantage. Start free today.`,
+        cta: 'Get Started Free',
+      },
+      {
+        type: 'Outcome-Focused',
+        headline: `From [Pain] to [Result] in Under 5 Minutes with ${name}`,
+        body: `${audience} use ${name} to [achieve goal] without [hassle]. Join free.`,
+        cta: 'Try It Free',
+      },
+    ],
+    postIdeas: {
+      twitter: [
+        `🧵 Thread: Everything I know about finding your first 100 ${audience} customers (that actually worked for ${name})`,
+        `We almost gave up on ${name} at month 3. Here's what changed (and the exact channels that moved the needle):`,
+        `Hot take: Most SaaS companies waste 80% of their ad budget. The 20% that works for us 👇`,
+      ],
+      reddit: [
+        `[Case Study] How we got from 0 to 500 users in 60 days without paid ads — full breakdown`,
+        `I tested 15 traffic channels for ${name}. Here's what actually converted (with data)`,
+        `Honest review of the ${audience} market after 6 months of building — AMA`,
+      ],
+      youtubeShorts: [
+        `"${name} does this automatically" — 30-second demo`,
+        `3 hacks ${audience} use in ${name} you probably don't know about`,
+        `Before vs After: ${name} in 45 seconds`,
+      ],
+    },
+  };
+};
+
+// ─── Initial map nodes ────────────────────────────────────────────────────────
+const nd = (nodeType, label, extraData = {}) => ({
+  label,
+  nodeType,
+  status: 'todo',
+  priority: 'medium',
+  color: NODE_TYPES_CONFIG[nodeType]?.color,
+  description: '',
+  context: { why: '', product: '', audience: '', expectedResult: '' },
+  actionPlan: { todo: '', tools: '', kpi: '', deadline: '', executionStatus: 'pending' },
+  comments: [],
+  ...extraData,
+});
+
+export const INITIAL_NODES = [
+  {
+    id: 'n1', type: 'custom', position: { x: 440, y: 40 },
+    data: nd('idea', 'Product Analysis', {
+      status: 'in-progress', priority: 'high',
+      description: 'Deep dive into product features, USP, and market positioning.',
+      context: {
+        why: 'Foundation for all marketing messaging and channel selection.',
+        product: 'Main product / service',
+        audience: 'Marketing team & stakeholders',
+        expectedResult: 'Clear positioning document with defined USP.',
+      },
+      actionPlan: {
+        todo: 'Document all features, pricing tiers, competitor comparison, unique value proposition.',
+        tools: 'Notion, Figma, Google Docs, Competitive Intel tools',
+        kpi: 'Positioning doc approved by founding team',
+        deadline: '',
+        executionStatus: 'in-progress',
+      },
+    }),
+  },
+  {
+    id: 'n2', type: 'custom', position: { x: 80, y: 220 },
+    data: nd('idea', 'Audience Research', {
+      priority: 'high',
+      description: 'Research and validate target audience segments.',
+      context: {
+        why: 'Precise audience understanding enables targeted messaging and channel selection.',
+        product: 'Main product / service',
+        audience: 'Potential customer segments',
+        expectedResult: '3–5 detailed audience personas with pain points and online hangouts.',
+      },
+      actionPlan: {
+        todo: 'Create personas, survey existing users, research pain points on Reddit/Twitter.',
+        tools: 'SparkToro, Reddit, Typeform, Hotjar, Twitter/X',
+        kpi: '3 validated personas with online channel mapping',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n3', type: 'custom', position: { x: 800, y: 220 },
+    data: nd('idea', 'Competitor Research', {
+      priority: 'high',
+      description: 'Analyse top competitors — traffic, messaging, ads, and gaps.',
+      context: {
+        why: 'Identify market gaps and differentiation opportunities.',
+        product: 'Main product / service',
+        audience: 'Competitor customers',
+        expectedResult: 'Competitor matrix + content and keyword gap analysis.',
+      },
+      actionPlan: {
+        todo: 'Audit 5 competitors: traffic sources, SEO, ad copy, pricing, reviews.',
+        tools: 'SimilarWeb, Semrush, Ahrefs, Meta Ads Library, G2',
+        kpi: 'Competitor analysis doc complete',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n4', type: 'custom', position: { x: 440, y: 310 },
+    data: nd('channel', 'Traffic Sources', {
+      priority: 'high',
+      description: 'Identify and score the most promising traffic acquisition channels.',
+      context: {
+        why: 'Diversified acquisition reduces single-channel dependency and reduces CAC over time.',
+        product: 'Main product / service',
+        audience: 'Target personas',
+        expectedResult: 'Prioritised list of 5–8 channels with ICE scores.',
+      },
+      actionPlan: {
+        todo: 'Research channels, score by potential / effort / fit. Build 30-day channel plan.',
+        tools: 'Traffic Strategy Map, SimilarWeb, Semrush, SparkToro',
+        kpi: '5 channels identified with clear owner and budget allocation',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n5', type: 'custom', position: { x: 80, y: 500 },
+    data: nd('action', 'Content Strategy', {
+      priority: 'medium',
+      description: 'Plan and execute content marketing across organic channels.',
+      context: {
+        why: 'Content drives compounding organic traffic and builds brand authority.',
+        product: 'Main product / service',
+        audience: 'Organic searchers & social followers',
+        expectedResult: '30-day content calendar + SEO keyword plan.',
+      },
+      actionPlan: {
+        todo: 'Keyword research, editorial calendar, content templates, distribution plan.',
+        tools: 'Ahrefs, Notion, Canva, Buffer, ChatGPT',
+        kpi: '20 content pieces/month; organic sessions +20% MoM',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n6', type: 'custom', position: { x: 440, y: 500 },
+    data: nd('channel', 'Paid Ads', {
+      priority: 'medium',
+      description: 'Launch and optimise paid advertising to drive immediate traffic.',
+      context: {
+        why: 'Paid ads provide fast, scalable, and measurable user acquisition.',
+        product: 'Main product / service',
+        audience: 'High-intent & retargeting audiences',
+        expectedResult: 'ROAS-positive campaigns at controlled scale.',
+      },
+      actionPlan: {
+        todo: 'Set up Google Ads + Meta Ads. Create landing pages. Define bidding strategy.',
+        tools: 'Google Ads, Meta Ads Manager, Canva, GA4, Hotjar',
+        kpi: 'ROAS ≥ 3x; CAC within target payback period',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n7', type: 'custom', position: { x: 800, y: 500 },
+    data: nd('action', 'Organic Growth', {
+      priority: 'medium',
+      description: 'SEO, social media, and community building for zero-cost traffic.',
+      context: {
+        why: 'Organic traffic compounds over time and has the lowest marginal CAC.',
+        product: 'Main product / service',
+        audience: 'Broad target demographic',
+        expectedResult: 'Organic traffic +30% in 3 months.',
+      },
+      actionPlan: {
+        todo: 'Technical SEO audit, backlink outreach, social posting schedule, link building.',
+        tools: 'Ahrefs, Semrush, Screaming Frog, Buffer, HARO',
+        kpi: 'Organic sessions +30% QoQ; DA/DR +5 points',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n8', type: 'custom', position: { x: 80, y: 720 },
+    data: nd('action', 'Influencer Outreach', {
+      priority: 'low',
+      description: 'Partner with relevant micro-influencers and creators in the niche.',
+      context: {
+        why: 'Influencer endorsements provide social proof and reach with warm audiences.',
+        product: 'Main product / service',
+        audience: 'Influencer follower base',
+        expectedResult: '5 micro-influencer partnerships; 50K+ total reach.',
+      },
+      actionPlan: {
+        todo: 'Find 20 micro-influencers, create outreach templates, negotiate rev-share or gifting deals.',
+        tools: 'Creator.co, Grin, Modash, Twitter/X, LinkedIn',
+        kpi: '5 active partnerships; ≥10% CTR from referral links',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n9', type: 'custom', position: { x: 440, y: 720 },
+    data: nd('action', 'Community Marketing', {
+      priority: 'medium',
+      description: 'Build authentic presence in online communities where the audience gathers.',
+      context: {
+        why: 'Community trust converts at 3–5× higher rates than cold paid traffic.',
+        product: 'Main product / service',
+        audience: 'Niche community members',
+        expectedResult: 'Active presence in 5+ communities; 100+ referred visitors/month.',
+      },
+      actionPlan: {
+        todo: 'Join Reddit, Discord, Slack, IH. Contribute value first. Share product story naturally.',
+        tools: 'Reddit, Discord, Slack, Indie Hackers, Product Hunt, Hacker News',
+        kpi: '100 community-referred visitors/month; 5 community posts with 50+ upvotes',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n10', type: 'custom', position: { x: 800, y: 720 },
+    data: nd('hypothesis', 'Conversion Funnel', {
+      priority: 'high',
+      description: 'Optimise the visitor → trial → paid customer journey.',
+      context: {
+        why: 'Improving CVR by 1% doubles revenue from the same traffic budget.',
+        product: 'Main product / service',
+        audience: 'Website visitors',
+        expectedResult: 'CVR from landing page to trial +20%; trial-to-paid +15%.',
+      },
+      actionPlan: {
+        todo: 'Map full funnel. Identify biggest drop-off. Run A/B tests on hero, CTA, pricing.',
+        tools: 'Hotjar, GA4, VWO, Optimizely, CrazyEgg',
+        kpi: 'Landing page CVR ≥5%; trial-to-paid ≥25%',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n11', type: 'custom', position: { x: 260, y: 940 },
+    data: nd('result', 'Analytics & Reporting', {
+      priority: 'high',
+      description: 'Set up comprehensive tracking, dashboards, and weekly reporting.',
+      context: {
+        why: 'Data-driven decisions improve marketing efficiency and reduce wasted spend.',
+        product: 'Main product / service',
+        audience: 'Growth team & investors',
+        expectedResult: 'Real-time dashboard tracking all channels and conversion events.',
+      },
+      actionPlan: {
+        todo: 'Configure GA4, Mixpanel, Looker Studio dashboard, weekly reporting template.',
+        tools: 'GA4, Mixpanel, Looker Studio, Notion, Slack',
+        kpi: 'All channels tracked; weekly report delivered every Monday',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+  {
+    id: 'n12', type: 'custom', position: { x: 620, y: 940 },
+    data: nd('nextStep', 'Next Experiments', {
+      priority: 'medium',
+      description: 'Plan and prioritise next growth experiments based on data.',
+      context: {
+        why: 'Continuous experimentation drives compounding, sustainable growth.',
+        product: 'Main product / service',
+        audience: 'Growth team',
+        expectedResult: 'Backlog of 20+ experiments scored by ICE; 5 running/month.',
+      },
+      actionPlan: {
+        todo: 'Weekly growth meeting, maintain ICE-scored experiment backlog, run retrospectives.',
+        tools: 'Notion, Linear, Miro, Growth Hacking Canvas',
+        kpi: '5 experiments/month; 1 winning test promoted to permanent feature/campaign',
+        deadline: '',
+        executionStatus: 'pending',
+      },
+    }),
+  },
+];
+
+const mkEdge = (id, source, target, edgeStyle = 'sequence', animated = false) => ({
+  id, source, target,
+  type: 'custom',
+  animated,
+  data: { edgeStyle, pathType: 'smoothstep' },
+});
+
+export const INITIAL_EDGES = [
+  mkEdge('e1-4',   'n1',  'n4',  'flow',       true),
+  mkEdge('e2-4',   'n2',  'n4',  'dependency', false),
+  mkEdge('e3-4',   'n3',  'n4',  'dependency', false),
+  mkEdge('e4-5',   'n4',  'n5',  'sequence',   false),
+  mkEdge('e4-6',   'n4',  'n6',  'sequence',   false),
+  mkEdge('e4-7',   'n4',  'n7',  'sequence',   false),
+  mkEdge('e5-8',   'n5',  'n8',  'weak',       false),
+  mkEdge('e5-9',   'n5',  'n9',  'sequence',   false),
+  mkEdge('e6-10',  'n6',  'n10', 'triggers',   true),
+  mkEdge('e7-10',  'n7',  'n10', 'sequence',   false),
+  mkEdge('e8-11',  'n8',  'n11', 'sequence',   false),
+  mkEdge('e9-11',  'n9',  'n11', 'sequence',   false),
+  mkEdge('e10-11', 'n10', 'n11', 'sequence',   false),
+  mkEdge('e11-12', 'n11', 'n12', 'flow',       true),
+];
