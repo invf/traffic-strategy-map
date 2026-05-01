@@ -26,7 +26,7 @@ function Field({ label, required, Icon, children }) {
 }
 
 export default function ProductSetupModal() {
-  const { productInfo, generateMap, setShowSetup, setAiSuggestions, setIsGenerating, language } = useStore();
+  const { productInfo, generateMap, setShowSetup, setAiSuggestions, isGenerating, setIsGenerating, language } = useStore();
   const t = useTranslation();
 
   const [form, setForm] = useState({
