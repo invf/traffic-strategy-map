@@ -2,9 +2,8 @@ services:
   - type: web
     name: traffic-strategy-backend
     env: node
-    rootDir: backend
-    buildCommand: npm install
-    startCommand: node server.js
+    buildCommand: cd backend && npm install
+    startCommand: node backend/server.js
     envVars:
       - key: OPENAI_API_KEY
         sync: false
