@@ -2,8 +2,9 @@ import React, { useState, useMemo } from 'react';
 import {
   Lightbulb, Radio, FlaskConical, Zap, TestTube, BarChart2,
   ArrowRightCircle, GripVertical, ChevronDown, ChevronUp,
-  MousePointer2, Move, Link2, LayoutGrid, Globe2, Search,
+  MousePointer2, Move, Link2, LayoutGrid, Globe2, Search, UserCircle2,
 } from 'lucide-react';
+import { useStore } from '../store/useStore';
 import { NODE_TYPES_CONFIG } from '../data/mockData';
 import { MOCK_TRAFFIC_SOURCES } from '../data/mockData';
 import { EDGE_STYLES } from './CustomEdge';
@@ -79,30 +80,82 @@ function NodePaletteItem({ nodeType, config, t }) {
 }
 
 // ── Draggable traffic source item ─────────────────────────────────────────────
-function TrafficSourceItem({ source }) {
+function TrafficSourceItem({ source, accountUrl, onSetAccountUrl }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
   const onDragStart = (e) => {
     e.dataTransfer.setData('application/tsm-traffic-source', JSON.stringify(source));
     e.dataTransfer.effectAllowed = 'move';
   };
 
+  const handleAccountClick = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (accountUrl) {
+      window.open(accountUrl, '_blank', 'noopener,noreferrer');
+    } else {
+      setDraft('');
+      setEditing(true);
+    }
+  };
+
+  const save = (val) => {
+    onSetAccountUrl(val.trim());
+    setEditing(false);
+  };
+
   return (
-    <div
-      draggable
-      onDragStart={onDragStart}
-      className="group flex items-center gap-2.5 px-3 py-2 rounded-xl border cursor-grab active:cursor-grabbing hover:scale-[1.02] transition-all duration-150 select-none"
-      style={{
-        background: hexToRgba(source.color, 0.10),
-        borderColor: hexToRgba(source.color, 0.28),
-      }}
-      title={source.recommendedAction}
-    >
-      <span className="text-[18px] leading-none flex-shrink-0">{source.icon}</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-[11px] font-semibold text-white truncate leading-tight">{source.platform}</p>
-        <p className="text-[9px] truncate" style={{ color: hexToRgba(source.color, 0.85) }}>{source.category}</p>
+    <>
+      <div
+        draggable={!editing}
+        onDragStart={!editing ? onDragStart : undefined}
+        className="group flex items-center gap-2.5 px-3 py-2 rounded-xl border cursor-grab active:cursor-grabbing hover:scale-[1.02] transition-all duration-150 select-none"
+        style={{
+          background: hexToRgba(source.color, 0.10),
+          borderColor: hexToRgba(source.color, 0.28),
+        }}
+        title={source.recommendedAction}
+      >
+        <span className="text-[18px] leading-none flex-shrink-0">{source.icon}</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] font-semibold text-white truncate leading-tight">{source.platform}</p>
+          <p className="text-[9px] truncate" style={{ color: hexToRgba(source.color, 0.85) }}>{source.category}</p>
+        </div>
+        <button
+          onClick={handleAccountClick}
+          title="Account"
+          className={`flex-shrink-0 p-1 rounded-md transition-colors ${
+            accountUrl
+              ? 'text-green-400 hover:bg-green-500/15'
+              : 'text-slate-500 hover:text-cyan-400 hover:bg-cyan-500/10'
+          }`}
+        >
+          <UserCircle2 size={13} />
+        </button>
+        <GripVertical size={11} className="text-slate-600 flex-shrink-0 group-hover:text-slate-400 transition-colors" />
       </div>
-      <GripVertical size={11} className="text-slate-600 flex-shrink-0 group-hover:text-slate-400 transition-colors" />
-    </div>
+
+      {editing && (
+        <div className="-mt-1 pb-0.5 px-1" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-cyan-500/8 border border-cyan-500/25">
+            <UserCircle2 size={10} className="text-cyan-400 flex-shrink-0" />
+            <input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') save(draft);
+                if (e.key === 'Escape') setEditing(false);
+              }}
+              onBlur={() => { if (draft.trim()) save(draft); else setEditing(false); }}
+              placeholder="https://platform.com/@me"
+              className="flex-1 bg-transparent text-[10px] text-white placeholder-slate-600 outline-none"
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -219,6 +272,7 @@ function EdgeLegend({ t }) {
 // ── Traffic Sources panel ─────────────────────────────────────────────────────
 function TrafficPanel() {
   const [query, setQuery] = useState('');
+  const { accountUrls, setAccountUrl } = useStore();
 
   const filtered = useMemo(() => {
     if (!query.trim()) return MOCK_TRAFFIC_SOURCES;
@@ -256,7 +310,12 @@ function TrafficPanel() {
       {/* List */}
       <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-3 flex flex-col gap-1.5">
         {filtered.map((source) => (
-          <TrafficSourceItem key={source.id} source={source} />
+          <TrafficSourceItem
+            key={source.id}
+            source={source}
+            accountUrl={accountUrls[source.id] || ''}
+            onSetAccountUrl={(url) => setAccountUrl(source.id, url)}
+          />
         ))}
         {filtered.length === 0 && (
           <p className="text-[11px] text-slate-600 text-center py-6">No results</p>
