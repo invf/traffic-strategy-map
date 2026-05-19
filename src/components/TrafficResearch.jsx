@@ -390,10 +390,10 @@ function SourceCard({ source, t, accountUrl, onSetAccountUrl, onDelete }) {
             <button
               onClick={handleAccountClick}
               title={t('traffic_my_account')}
-              className={`p-1 rounded-lg transition-colors ${
+              className={`p-1.5 rounded-lg transition-colors ${
                 accountUrl
                   ? 'text-green-400 bg-green-500/10 hover:bg-green-500/20'
-                  : 'text-slate-600 hover:text-slate-400 hover:bg-white/5'
+                  : 'text-slate-400 hover:text-violet-400 hover:bg-violet-500/10'
               }`}
             >
               <UserCircle2 size={14} />
