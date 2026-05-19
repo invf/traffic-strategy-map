@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Search, Globe2, ExternalLink, Zap,
   AlertCircle, ChevronDown, ChevronUp, Filter,
-  Plus, X, Trash2, Check,
+  Plus, X, Trash2, Check, UserCircle2,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { MOCK_TRAFFIC_SOURCES } from '../data/mockData';
@@ -11,7 +11,7 @@ import { useTranslation } from '../i18n/useTranslation';
 const CATEGORIES = ['all', 'Paid Search', 'Paid Social', 'Video', 'Community', 'Organic Search',
   'Launch Platform', 'Social Media', 'Professional Network', 'Short Video',
   'Founder Community', 'Deal Marketplace', 'App Marketplace', 'Tech Community',
-  'Email / Sponsorship', 'Research Tool', 'Comparison Directory', 'Custom'];
+  'Email / Sponsorship', 'Research Tool', 'Comparison Directory', 'Content Platform', 'Custom'];
 
 const DIFFICULTY_OPTIONS = ['Low', 'Low–Medium', 'Medium', 'High', 'Very High'];
 const POTENTIAL_OPTIONS  = ['Low', 'Medium', 'High', 'Very High'];
@@ -46,6 +46,11 @@ const TAG_COLOR = {
   extension: 'bg-cyan-500/15 text-cyan-300',
   tech: 'bg-indigo-500/15 text-indigo-300',
   custom: 'bg-emerald-500/15 text-emerald-300',
+  content: 'bg-emerald-500/15 text-emerald-300',
+  seo: 'bg-cyan-500/15 text-cyan-300',
+  'thought-leadership': 'bg-amber-500/15 text-amber-300',
+  'high-intent': 'bg-violet-500/15 text-violet-300',
+  'long-term': 'bg-teal-500/15 text-teal-300',
   default: 'bg-white/5 text-slate-400',
 };
 
@@ -325,10 +330,26 @@ function AddSourceModal({ onClose }) {
 }
 
 // ── Source Card ───────────────────────────────────────────────────────────────
-function SourceCard({ source, t, onDelete }) {
+function SourceCard({ source, t, accountUrl, onSetAccountUrl, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [accountDraft, setAccountDraft] = useState(accountUrl || '');
+  const accountInputRef = useRef(null);
   const tagClass = (tag) => TAG_COLOR[tag] || TAG_COLOR.default;
+
+  useEffect(() => { setAccountDraft(accountUrl || ''); }, [accountUrl]);
+
+  const handleAccountClick = (e) => {
+    e.stopPropagation();
+    if (accountUrl) {
+      window.open(accountUrl, '_blank', 'noopener,noreferrer');
+    } else {
+      setExpanded(true);
+      setTimeout(() => accountInputRef.current?.focus(), 80);
+    }
+  };
+
+  const saveAccount = () => onSetAccountUrl(accountDraft.trim());
 
   return (
     <div className={`bg-white/[0.025] border rounded-2xl overflow-hidden transition-all duration-200 ${
@@ -366,6 +387,17 @@ function SourceCard({ source, t, onDelete }) {
           </div>
 
           <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={handleAccountClick}
+              title={t('traffic_my_account')}
+              className={`p-1 rounded-lg transition-colors ${
+                accountUrl
+                  ? 'text-green-400 bg-green-500/10 hover:bg-green-500/20'
+                  : 'text-slate-600 hover:text-slate-400 hover:bg-white/5'
+              }`}
+            >
+              <UserCircle2 size={14} />
+            </button>
             {onDelete && (
               <button
                 onClick={() => setConfirming(true)}
@@ -441,6 +473,35 @@ function SourceCard({ source, t, onDelete }) {
       {/* Expanded details */}
       {expanded && (
         <div className="border-t border-white/[0.05] px-4 py-4 space-y-3">
+          {/* My Account URL */}
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1.5">
+              {t('traffic_my_account')}
+            </p>
+            <div className="flex items-center gap-2">
+              <UserCircle2 size={13} className={accountUrl ? 'text-green-400 flex-shrink-0' : 'text-slate-600 flex-shrink-0'} />
+              <input
+                ref={accountInputRef}
+                value={accountDraft}
+                onChange={(e) => setAccountDraft(e.target.value)}
+                onBlur={saveAccount}
+                onKeyDown={(e) => { if (e.key === 'Enter') { saveAccount(); e.target.blur(); } }}
+                placeholder={t('traffic_account_placeholder')}
+                className="flex-1 px-2.5 py-1.5 text-[11px] rounded-lg bg-white/[0.04] border border-white/[0.07] text-white placeholder-slate-600 outline-none focus:border-indigo-500/40 transition-colors"
+              />
+              {accountDraft && (
+                <a
+                  href={accountDraft}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="p-1.5 rounded-lg text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 flex-shrink-0 transition-colors"
+                >
+                  <ExternalLink size={11} />
+                </a>
+              )}
+            </div>
+          </div>
+
           {source.recommendedAction && (
             <div className="p-3 rounded-xl bg-indigo-500/8 border border-indigo-500/20">
               <div className="flex items-center gap-1.5 mb-1.5">
@@ -522,6 +583,7 @@ export default function TrafficResearch() {
     trafficQuery, setTrafficQuery, trafficFilter, setTrafficFilter,
     customTrafficSources, deleteCustomSource,
     hiddenSourceIds, hideSource, restoreAllSources,
+    accountUrls, setAccountUrl,
   } = useStore();
   const t = useTranslation();
   const [showAddModal, setShowAddModal] = useState(false);
@@ -649,6 +711,8 @@ export default function TrafficResearch() {
                 key={source.id}
                 source={source}
                 t={t}
+                accountUrl={accountUrls[source.id] || ''}
+                onSetAccountUrl={(url) => setAccountUrl(source.id, url)}
                 onDelete={source.custom
                   ? () => deleteCustomSource(source.id)
                   : () => hideSource(source.id)

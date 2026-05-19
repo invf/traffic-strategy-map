@@ -330,6 +330,10 @@ export const useStore = create(
         set((s) => ({ hiddenSourceIds: s.hiddenSourceIds.includes(id) ? s.hiddenSourceIds : [...s.hiddenSourceIds, id] })),
       restoreAllSources: () => set({ hiddenSourceIds: [] }),
 
+      accountUrls: {},
+      setAccountUrl: (id, url) =>
+        set((s) => ({ accountUrls: { ...s.accountUrls, [id]: url } })),
+
       // ── Language ───────────────────────────────────────────────────────────
       language: 'en',
       setLanguage: (lang) => set({ language: lang }),
@@ -402,6 +406,7 @@ export const useStore = create(
         canvasBg: s.canvasBg,
         projects: s.projects,
         activeProjectId: s.activeProjectId,
+        accountUrls: s.accountUrls,
       }),
     }
   )

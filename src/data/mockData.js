@@ -385,6 +385,27 @@ export const MOCK_TRAFFIC_SOURCES = [
     ]
   },
   {
+    id: 'ts17',
+    platform: 'Medium',
+    category: 'Content Platform',
+    url: 'https://medium.com',
+    estimatedTraffic: '180M+ monthly visits',
+    countries: ['US', 'GB', 'IN', 'CA', 'AU', 'DE'],
+    trafficSources: ['Organic Search', 'Direct', 'Email Digest', 'Social Shares'],
+    keywords: ['medium articles', 'thought leadership', 'content marketing', 'tech blog', 'medium publication', 'partner program'],
+    audience: 'Developers, designers, marketers, founders, tech enthusiasts; strong B2B and product audience',
+    difficulty: 'Low',
+    potential: 'Medium',
+    recommendedAction: 'Publish in-depth articles on top Medium publications (The Startup, Better Programming, Towards Data Science). Optimise titles for search intent. Cross-post with canonical URL pointing back to your own blog to capture SEO value. Apply for the Partner Program — monetised reads create an incentive to publish consistently.',
+    icon: '✍️',
+    color: '#00AB6C',
+    tags: ['content', 'organic', 'thought-leadership', 'seo', 'b2b'],
+    researchLinks: [
+      { label: 'Medium Partner Program', url: 'https://medium.com/earn' },
+      { label: 'Medium Publications', url: 'https://medium.com/publications' },
+    ]
+  },
+  {
     id: 'ts16',
     platform: 'AlternativeTo',
     category: 'Comparison Directory',
