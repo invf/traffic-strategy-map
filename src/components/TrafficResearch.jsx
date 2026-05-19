@@ -389,14 +389,14 @@ function SourceCard({ source, t, accountUrl, onSetAccountUrl, onDelete }) {
           <div className="flex items-center gap-1 flex-shrink-0">
             <button
               onClick={handleAccountClick}
-              title={t('traffic_my_account')}
-              className={`p-1.5 rounded-lg transition-colors ${
+              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors border ${
                 accountUrl
-                  ? 'text-green-400 bg-green-500/10 hover:bg-green-500/20'
-                  : 'text-slate-400 hover:text-violet-400 hover:bg-violet-500/10'
+                  ? 'text-green-400 bg-green-500/10 border-green-500/25 hover:bg-green-500/20'
+                  : 'text-slate-400 bg-white/[0.04] border-white/[0.08] hover:text-violet-300 hover:bg-violet-500/10 hover:border-violet-500/25'
               }`}
             >
-              <UserCircle2 size={14} />
+              <UserCircle2 size={11} />
+              <span>{t('traffic_my_account')}</span>
             </button>
             {onDelete && (
               <button
