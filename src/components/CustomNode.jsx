@@ -1,11 +1,12 @@
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import { Handle, Position, useViewport } from '@xyflow/react';
 import {
   Lightbulb, Radio, FlaskConical, Zap, TestTube, BarChart2,
   ArrowRightCircle, CheckCircle2, Clock, Ban, Circle,
-  MessageSquare,
+  MessageSquare, Link2,
 } from 'lucide-react';
 import { NODE_TYPES_CONFIG, STATUS_CONFIG, PRIORITY_CONFIG } from '../data/mockData';
+import { useStore } from '../store/useStore';
 
 const ICON_MAP = {
   Lightbulb, Radio, FlaskConical, Zap, TestTube, BarChart2, ArrowRightCircle,
@@ -225,7 +226,28 @@ function CompactNode({ color, Icon, cfg, data, selected }) {
 }
 
 // ── FULL mode (zoom ≥ 0.65) — complete node ───────────────────────────────────
-function FullNode({ color, Icon, cfg, statusCfg, priCfg, data, selected, commentCount }) {
+function FullNode({ color, Icon, cfg, statusCfg, priCfg, data, selected, commentCount, id, updateNodeData }) {
+  const [editingAccount, setEditingAccount] = useState(false);
+  const [accountDraft, setAccountDraft] = useState('');
+  const hasAccount = !!data.accountUrl;
+
+  const handleAccountClick = (e) => {
+    e.stopPropagation();
+    if (hasAccount) {
+      window.open(data.accountUrl, '_blank', 'noopener,noreferrer');
+    } else {
+      setAccountDraft('');
+      setEditingAccount(true);
+    }
+  };
+
+  const saveAccount = (e) => {
+    if (e) e.stopPropagation();
+    const url = accountDraft.trim();
+    if (url) updateNodeData(id, { accountUrl: url });
+    setEditingAccount(false);
+  };
+
   const cardBg = `linear-gradient(158deg, ${hexToRgba(color, 0.25)} 0%, ${hexToRgba(color, 0.10)} 38%, rgba(4,5,18,0.88) 100%)`;
   const cardShadow = selected
     ? `0 0 0 2px ${color}, 0 0 28px ${hexToRgba(color, 0.45)}, 0 16px 48px rgba(0,0,0,0.65), inset 0 1px 0 ${hexToRgba(color, 0.35)}`
@@ -237,6 +259,57 @@ function FullNode({ color, Icon, cfg, statusCfg, priCfg, data, selected, comment
       style={{ position: 'relative', minWidth: 196, maxWidth: 236, cursor: 'pointer' }}
     >
       <Handles color={color} />
+
+      {/* ── Account URL input popup (outside overflow:hidden card) ── */}
+      {editingAccount && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, right: 0,
+            background: 'rgba(8,10,28,0.97)', border: '1px solid rgba(99,102,241,0.45)',
+            borderRadius: 10, padding: '8px 10px', zIndex: 999,
+            boxShadow: '0 4px 24px rgba(0,0,0,0.7)',
+          }}
+        >
+          <p style={{ fontSize: 10, color: '#94a3b8', margin: '0 0 5px', fontWeight: 600 }}>Account URL</p>
+          <input
+            autoFocus
+            value={accountDraft}
+            onChange={(e) => setAccountDraft(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') saveAccount();
+              if (e.key === 'Escape') setEditingAccount(false);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            placeholder="https://platform.com/@username"
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 6, padding: '4px 8px', color: '#fff', fontSize: 11,
+              outline: 'none',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 4, marginTop: 6, justifyContent: 'flex-end' }}>
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={saveAccount}
+              style={{ background: 'rgba(99,102,241,0.35)', border: '1px solid rgba(99,102,241,0.55)', borderRadius: 5, padding: '2px 10px', color: '#fff', fontSize: 10, cursor: 'pointer', fontWeight: 700 }}
+            >
+              Save
+            </button>
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); setEditingAccount(false); }}
+              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 5, padding: '2px 8px', color: '#94a3b8', fontSize: 10, cursor: 'pointer' }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{
         background: cardBg,
@@ -341,12 +414,30 @@ function FullNode({ color, Icon, cfg, statusCfg, priCfg, data, selected, comment
             {priCfg.dot} {priCfg.label}
           </span>
 
-          {commentCount > 0 && (
-            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: '#94a3b8' }}>
-              <MessageSquare size={9} />
-              {commentCount}
-            </span>
-          )}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+            {commentCount > 0 && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: '#94a3b8' }}>
+                <MessageSquare size={9} />
+                {commentCount}
+              </span>
+            )}
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={handleAccountClick}
+              title={hasAccount ? `Open: ${data.accountUrl}` : 'Set account URL'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 3,
+                background: hasAccount ? 'rgba(74,222,128,0.12)' : 'rgba(255,255,255,0.06)',
+                border: `1px solid ${hasAccount ? 'rgba(74,222,128,0.3)' : 'rgba(255,255,255,0.1)'}`,
+                borderRadius: 6, padding: '2px 6px', cursor: 'pointer',
+                color: hasAccount ? '#4ade80' : '#64748b',
+                fontSize: 9, fontWeight: 700, lineHeight: 1,
+              }}
+            >
+              <Link2 size={9} />
+              <span>Account</span>
+            </button>
+          </div>
         </div>
 
         {/* ── Priority glow bar ── */}
@@ -360,10 +451,11 @@ function FullNode({ color, Icon, cfg, statusCfg, priCfg, data, selected, comment
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
-const CustomNode = ({ data, selected }) => {
+const CustomNode = ({ data, selected, id }) => {
   injectStyles();
 
   const { zoom } = useViewport();
+  const updateNodeData = useStore((s) => s.updateNodeData);
 
   const cfg      = NODE_TYPES_CONFIG[data.nodeType] || NODE_TYPES_CONFIG.action;
   const statusCfg = STATUS_CONFIG[data.status]       || STATUS_CONFIG.todo;
@@ -383,6 +475,7 @@ const CustomNode = ({ data, selected }) => {
       color={color} Icon={Icon} cfg={cfg}
       statusCfg={statusCfg} priCfg={priCfg}
       data={data} selected={selected} commentCount={commentCount}
+      id={id} updateNodeData={updateNodeData}
     />
   );
 };
