@@ -114,21 +114,25 @@ async function run() {
     assert(bAllowed, "User G's own limit is untouched by user F having exhausted theirs - rate limiting is per-user, not shared");
   }
 
-  // ===== recordUsage is called, but its failure never blocks the response =====
+  // ===== Concurrent requests from the SAME user never both pass a limit of 1 =====
+  // (Usage LOGGING's own fire-and-forget safety is tested separately in
+  // server.test.mjs, since recordUsage now lives there, called after
+  // the OpenAI call resolves - not in this middleware at all.)
   {
     __resetRateLimiterForTests();
-    let usageCalledWith;
-    const mw = createRequireEntitlement({
-      checkEntitlement: async () => 'active',
-      recordUsage: async (userId, meta) => { usageCalledWith = { userId, meta }; throw new Error('usage table unreachable'); },
-    });
-    const req = { userId: 'user-h', path: '/api/openai' };
-    const res = fakeRes();
-    let nextCalled = false;
-    await mw(req, res, () => { nextCalled = true; });
-    assert(nextCalled, 'A failing recordUsage() (fire-and-forget) never blocks the actual request from proceeding');
-    await new Promise((r) => setTimeout(r, 10)); // let the fire-and-forget rejection settle
-    assert(usageCalledWith?.userId === 'user-h', 'recordUsage is called with the correct userId regardless of its own outcome');
+    const mw = createRequireEntitlement({ checkEntitlement: async () => 'active', dailyLimit: 1 });
+    let firstNext = false;
+    let secondNext = false;
+    // Both calls are issued before either awaits anything blocking -
+    // checkEntitlement resolves asynchronously for each independently,
+    // but the synchronous counter they both reach afterward has no
+    // window where both can observe "not yet at limit" at once.
+    await Promise.all([
+      mw({ userId: 'user-i', path: '/api/openai' }, fakeRes(), () => { firstNext = true; }),
+      mw({ userId: 'user-i', path: '/api/openai' }, fakeRes(), () => { secondNext = true; }),
+    ]);
+    const allowedCount = [firstNext, secondNext].filter(Boolean).length;
+    assert(allowedCount === 1, 'Two concurrent requests for the SAME user against a limit of 1 result in EXACTLY one allowed, never both, never zero - the synchronous counter has no window for both to pass');
   }
 
   console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);

@@ -46,11 +46,18 @@ export async function checkEntitlement(userId) {
   }
 }
 
-export async function recordUsage(userId, meta) {
+// Called from server.js AFTER the OpenAI call resolves (success or
+// failure) - this is why `status`/`upstreamStatus` are required fields,
+// not optional metadata: this table's whole purpose is to say what
+// actually happened, not merely that a request was attempted (the
+// rate limiter in requireEntitlement.js is what counts attempts, for
+// spending-control purposes; this is observability on top of that,
+// best-effort, never load-bearing).
+export async function recordUsage(userId, { path, at, status, upstreamStatus = null }) {
   // Best-effort only - the caller already treats a rejection here as
-  // non-fatal (see requireEntitlement.js's fire-and-forget call).
+  // non-fatal (see server.js's fire-and-forget call).
   await getPool().query(
-    `INSERT INTO public.openai_usage (user_id, path, requested_at) VALUES ($1, $2, $3)`,
-    [userId, meta.path, meta.at]
+    `INSERT INTO public.openai_usage (user_id, path, requested_at, status, upstream_status) VALUES ($1, $2, $3, $4, $5)`,
+    [userId, path, at, status, upstreamStatus]
   );
 }

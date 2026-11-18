@@ -12,12 +12,23 @@
 // middleware does NOT itself prove is end-to-end RLS compatibility -
 // see docs/AUTH_003A_OAUTH_RLS_TEST.md for that separate question.
 //
+// expectedClientId, when given, additionally requires the token's own
+// client_id claim to match it. Without this, ANY valid token issued by
+// this shared project - including one issued to a completely different
+// OAuth client, e.g. Launch Studio's - would be accepted here too,
+// since every client's tokens share the same issuer, audience and
+// signing key. A regular (non-OAuth) session token has no client_id
+// claim at all, so expectedClientId also has the effect of rejecting
+// those if set - a deliberate choice for an endpoint meant to be
+// reached only via this app's own OAuth client, not via any direct
+// browser session.
+//
 // Fails closed: any verification failure is a 401, never a silent
 // pass-through. Never logs the token itself.
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
-export function createRequireAuth({ supabaseUrl, jwksUri, issuer, audience = 'authenticated' } = {}) {
+export function createRequireAuth({ supabaseUrl, jwksUri, issuer, audience = 'authenticated', expectedClientId } = {}) {
   // SUPABASE_URL, not VITE_SUPABASE_URL - this runs in the Express
   // backend, not the Vite-built frontend; Vite's VITE_-prefix convention
   // doesn't apply here and there is no build-time inlining to rely on.
@@ -43,6 +54,10 @@ export function createRequireAuth({ supabaseUrl, jwksUri, issuer, audience = 'au
       const { payload } = await jwtVerify(token, jwks, { issuer: resolvedIssuer, audience });
       if (!payload.sub) {
         return res.status(401).json({ error: { message: 'Token has no subject claim.' } });
+      }
+      if (expectedClientId && payload.client_id !== expectedClientId) {
+        console.error('[requireAuth] Token rejected: client_id did not match the expected OAuth client.');
+        return res.status(401).json({ error: { message: 'Invalid or expired token.' } });
       }
       req.userId = payload.sub;
       req.tokenClaims = payload;

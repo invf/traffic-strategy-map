@@ -180,6 +180,50 @@ async function run() {
     assert(res.statusCode === 401 && !nextCalled, 'A token with no sub claim is rejected - there is no user id to trust');
   }
 
+  // ===== expectedClientId: a token issued to a DIFFERENT OAuth client of the SAME project is rejected =====
+  {
+    const requireAuthScoped = createRequireAuth({
+      jwksUri: `${baseUrl}/auth/v1/.well-known/jwks.json`,
+      issuer,
+      audience: 'authenticated',
+      expectedClientId: 'traffic-strategy-map-client',
+    });
+    const tokenForADifferentClient = await signToken({ client_id: 'launch-studio-client' });
+    const req = { headers: { authorization: `Bearer ${tokenForADifferentClient}` } };
+    const res = fakeRes();
+    let nextCalled = false;
+    await requireAuthScoped(req, res, () => { nextCalled = true; });
+    assert(
+      res.statusCode === 401 && !nextCalled,
+      "A validly-signed, correctly-issued token for a DIFFERENT OAuth client (e.g. Launch Studio's) is rejected when expectedClientId is set - same issuer/audience/signature is not enough on its own"
+    );
+  }
+  {
+    const requireAuthScoped = createRequireAuth({
+      jwksUri: `${baseUrl}/auth/v1/.well-known/jwks.json`,
+      issuer,
+      audience: 'authenticated',
+      expectedClientId: 'traffic-strategy-map-client',
+    });
+    const tokenForTheRightClient = await signToken({ client_id: 'traffic-strategy-map-client' });
+    const req = { headers: { authorization: `Bearer ${tokenForTheRightClient}` } };
+    const res = fakeRes();
+    let nextCalled = false;
+    await requireAuthScoped(req, res, () => { nextCalled = true; });
+    assert(nextCalled, 'A token for the EXPECTED client_id passes, all else being equal');
+  }
+  {
+    // Without expectedClientId set at all (today's default, until this
+    // app's own OAuth client is registered), client_id is not checked -
+    // confirmed explicitly so this isn't mistaken for always-on.
+    const tokenAnyClient = await signToken({ client_id: 'some-other-client' });
+    const req = { headers: { authorization: `Bearer ${tokenAnyClient}` } };
+    const res = fakeRes();
+    let nextCalled = false;
+    await requireAuth(req, res, () => { nextCalled = true; }); // the module-level requireAuth has no expectedClientId
+    assert(nextCalled, 'Without expectedClientId configured, client_id is not restricted - this is the current, temporary state before this app has its own registered OAuth client');
+  }
+
   await new Promise((resolve) => server.close(resolve));
 
   console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);

@@ -24,6 +24,13 @@ CREATE ROLE traffic_strategy_map_app LOGIN;
 -- Set the password separately, out of band:
 --   ALTER ROLE traffic_strategy_map_app PASSWORD '<generated, never committed>';
 
+-- Explicit, not assumed: Supabase projects commonly revoke PUBLIC's
+-- default CONNECT privilege on the database as part of their own
+-- baseline hardening, in which case a newly created LOGIN role cannot
+-- connect at all without this. Harmless to run even if PUBLIC already
+-- has it.
+GRANT CONNECT ON DATABASE postgres TO traffic_strategy_map_app;
+
 GRANT USAGE ON SCHEMA adveser_core TO traffic_strategy_map_app;
 GRANT SELECT ON adveser_core.user_product_entitlements TO traffic_strategy_map_app;
 

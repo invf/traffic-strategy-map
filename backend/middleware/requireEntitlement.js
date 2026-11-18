@@ -1,14 +1,33 @@
-// AUTH-003A - entitlement check + per-user rate limit + usage tracking
-// for /api/openai. Dependency-injected (checkEntitlement, recordUsage)
-// so the policy itself is unit-testable without a real Postgres
-// connection - same convention used throughout this engagement
-// (resolveProductGateway.ts's GatewayDeps, ssoRoutes.ts's SsoRouterDeps).
+// AUTH-003A - entitlement check + per-user rate limit for /api/openai.
+// Dependency-injected (checkEntitlement) so the policy itself is unit-
+// testable without a real Postgres connection - same convention used
+// throughout this engagement (resolveProductGateway.ts's GatewayDeps,
+// ssoRoutes.ts's SsoRouterDeps).
+//
+// This is the actual spending-prevention mechanism - a best-effort
+// usage LOG (see lib/entitlements.js's recordUsage, called separately
+// from server.js AFTER the OpenAI call resolves) must never be mistaken
+// for this. The two are deliberately decoupled: this counter increments
+// synchronously, before any async OpenAI call starts, specifically so
+// a burst of concurrent requests can't all read the same "not yet at
+// limit" state before any of them is recorded - in JS's single-threaded
+// event loop, checkAndIncrementRateLimit's own body has no `await` in
+// it, so two concurrent calls for the same user can never interleave
+// inside it; the second one always observes the first's increment.
+// Logging usage only AFTER a real OpenAI response, by contrast, would
+// let N concurrent requests all start before any of them count -
+// exactly the race this function exists to prevent.
 //
 // Rate limiting is an in-memory Map, single-process only - the same
 // documented trade-off Launch Studio's SSO session store already
 // accepts for this deployment's scale. A multi-instance deployment
-// would need a shared store (Redis, or a Postgres-backed counter);
-// noted, not solved here.
+// would need a shared store (Redis, or a Postgres-backed counter with
+// its own atomic increment, e.g. UPDATE ... SET count = count + 1
+// RETURNING count under the same transaction as the check); noted, not
+// solved here - Render's render.yaml for this service is a single
+// `type: web` instance with no scaling config, so this limitation is
+// not currently live, but would become real the moment this service is
+// ever scaled horizontally.
 
 const DEFAULT_DAILY_LIMIT = 50;
 const usageByUser = new Map(); // userId -> { count, resetAt }
@@ -33,7 +52,6 @@ function checkAndIncrementRateLimit(userId, dailyLimit) {
 
 export function createRequireEntitlement({
   checkEntitlement, // (userId) => Promise<'active' | 'none' | 'error'>
-  recordUsage = async () => {}, // (userId, meta) => Promise<void> - best-effort, never blocks the response
   dailyLimit = DEFAULT_DAILY_LIMIT,
 }) {
   if (typeof checkEntitlement !== 'function') {
@@ -70,11 +88,13 @@ export function createRequireEntitlement({
     }
     res.setHeader('X-RateLimit-Remaining', String(remaining));
 
-    // Fire-and-forget: a logging failure must never block or fail the
-    // actual request it's describing.
-    void recordUsage(req.userId, { path: req.path, at: new Date().toISOString() }).catch((err) => {
-      console.error('[requireEntitlement] Usage recording failed (non-fatal):', err?.message ?? err);
-    });
+    // Usage LOGGING (as opposed to the rate-limit COUNTING above) is
+    // deliberately NOT done here - see server.js, which calls
+    // recordUsage() itself after the OpenAI call actually resolves, so
+    // the log reflects what really happened (success/failure/status),
+    // not merely that a request was attempted. The rate limit above has
+    // already been charged regardless, which is what actually prevents
+    // overspend; the log is observability only.
 
     return next();
   };

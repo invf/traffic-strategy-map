@@ -8,11 +8,20 @@
 -- connection - revoke those roles explicitly so that remains true even
 -- if someone adds this table to a future "expose everything" habit.
 
+-- status/upstream_status: recorded AFTER the OpenAI call resolves (see
+-- backend/server.js), not at the moment the request was merely
+-- attempted - that distinction is the whole point of this table's
+-- existence as a SEPARATE thing from the in-memory rate limiter
+-- (backend/middleware/requireEntitlement.js), which counts attempts
+-- for spending-control purposes and is the actual enforcement
+-- mechanism, never this best-effort log.
 CREATE TABLE IF NOT EXISTS public.openai_usage (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   user_id uuid NOT NULL,
   path text NOT NULL,
-  requested_at timestamptz NOT NULL DEFAULT now()
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  status text NOT NULL, -- 'success' | 'upstream_error' | 'request_failed' | 'not_configured'
+  upstream_status integer -- OpenAI's own HTTP status, when a response was received at all
 );
 
 CREATE INDEX IF NOT EXISTS openai_usage_user_id_requested_at_idx

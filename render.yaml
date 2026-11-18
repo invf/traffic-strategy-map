@@ -18,3 +18,5 @@ services:
         sync: false
       - key: TRAFFIC_STRATEGY_MAP_DB_URL
         sync: false
+      - key: TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_ID
+        sync: false

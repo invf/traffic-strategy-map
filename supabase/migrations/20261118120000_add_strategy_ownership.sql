@@ -6,15 +6,17 @@
 -- reviewable artifact, not something this session ran against the real
 -- shared project.
 --
--- Both new columns are additive and nullable/defaulted, so this is
--- reversible with:
---   ALTER TABLE public.strategies DROP COLUMN user_id, DROP COLUMN is_demo;
---   ALTER TABLE public.strategies DISABLE ROW LEVEL SECURITY; -- if desired
---   DROP POLICY IF EXISTS "read own or approved demo" ON public.strategies;
---   DROP POLICY IF EXISTS "insert own" ON public.strategies;
---   DROP POLICY IF EXISTS "update own" ON public.strategies;
---   DROP POLICY IF EXISTS "delete own" ON public.strategies;
--- No row is deleted or overwritten by either direction.
+-- AUTH-003A-3 correction: dropping these two columns is ONLY safe
+-- BEFORE real users have created real owned rows ("pre-cutover") - once
+-- they have, dropping the columns destroys their ownership metadata
+-- permanently (the rows survive, but who-owns-what does not). See
+-- docs/AUTH_003A_ROLLBACK_PROCEDURES.md for the pre-cutover vs post-
+-- cutover procedures - the short version: pre-cutover, drop the
+-- columns; post-cutover, `ALTER TABLE public.strategies DISABLE ROW
+-- LEVEL SECURITY;` ALONE (never drop the columns) restores fully-open
+-- access immediately while preserving every row's real ownership,
+-- ready to re-enable once whatever prompted the rollback is fixed.
+-- No row is ever deleted by either procedure.
 --
 -- is_demo DEFAULT false (not true): the ticket is explicit that existing
 -- ownerless records must NOT be auto-classified as public demo content.
