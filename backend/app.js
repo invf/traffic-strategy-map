@@ -8,13 +8,38 @@
 import express from 'express';
 import cors from 'cors';
 
-export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetchImpl = fetch, recordUsage, frontendUrl = '*' }) {
+export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetchImpl = fetch, recordUsage, frontendUrl = '*', ssoRouter, requireSsoAuth, strategiesRouter }) {
   const app = express();
 
-  app.use(cors({ origin: frontendUrl, methods: ['GET', 'POST', 'OPTIONS'] }));
+  // AUTH-003B: credentials: true is required for the cross-origin SSO
+  // cookie (Vercel frontend, Render backend - genuinely different
+  // origins) to ever be sent by the browser at all. The CORS spec
+  // forbids combining credentials with origin: '*', so frontendUrl
+  // must be a real, specific origin whenever ssoRouter/cookies are in
+  // play - acceptable here since this app always configures
+  // FRONTEND_URL for its one real frontend.
+  app.use(cors({ origin: frontendUrl, methods: ['GET', 'POST', 'OPTIONS'], credentials: true }));
   app.use(express.json({ limit: '256kb' }));
 
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+  // Mounted OUTSIDE the /api/openai auth gate below - these ARE the
+  // flow's own entry/exit points, not protected routes.
+  if (ssoRouter) {
+    app.use(ssoRouter);
+  }
+
+  // AUTH-003B - the strategies proxy (backend/routes/strategiesProxy.js)
+  // is gated by requireSsoAuth specifically, never requireAuth above:
+  // this is the real browser frontend's own cookie-based credential,
+  // not a caller holding a raw Bearer token. Only mounted once the SSO
+  // cookie mechanism is actually configured (see server.js) - otherwise
+  // these routes simply don't exist (404), the same "absent, not
+  // silently degraded" discipline as every other not-yet-configured
+  // piece of this app.
+  if (strategiesRouter && requireSsoAuth) {
+    app.use(requireSsoAuth, strategiesRouter);
+  }
 
   app.post('/api/openai', requireAuth, requireEntitlement, async (req, res) => {
     const userId = req.userId;

@@ -16,7 +16,20 @@ services:
       # not the place to hardcode any environment's actual value.
       - key: SUPABASE_URL
         sync: false
+      # AUTH-003B - the project's public anon key (same one already in
+      # the frontend bundle as VITE_SUPABASE_ANON_KEY - not a secret).
+      # Required as PostgREST's `apikey` header by the strategies proxy
+      # (backend/routes/strategiesProxy.js); the real per-user identity
+      # comes from the Authorization: Bearer header, not this key.
+      - key: SUPABASE_ANON_KEY
+        sync: false
       - key: TRAFFIC_STRATEGY_MAP_DB_URL
         sync: false
       - key: TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_ID
+        sync: false
+      - key: TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: TRAFFIC_STRATEGY_MAP_OAUTH_REDIRECT_URI
+        sync: false
+      - key: TRAFFIC_STRATEGY_MAP_SESSION_SECRET
         sync: false
