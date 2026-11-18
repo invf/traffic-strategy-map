@@ -2,6 +2,8 @@
 
 Continuing from commit `e9a4bec2a43f83023c634ffd6f53a2a297ce6ca7` (implementation and security tests accepted). This document is the release plan only. **Nothing in this document has been executed against production.** No merge, deploy, migration, Supabase configuration change, or entitlement grant happened this session.
 
+**Scope update (later session)**: the 3 existing `public.strategies` rows were confirmed disposable test data; their preservation is no longer a release requirement (their loss is acceptable, though the migration's own `ADD COLUMN`-only design leaves them unchanged regardless). Every reference below to backing them up or verifying their preservation is superseded by `docs/AUTH_003C_MIGRATION_PREPARATION.md`'s own "Scope update" note and its downgraded Task 1 — this document's backup/preservation language is kept for historical record only, not as an active requirement.
+
 ## Step 1 — Final preparation
 
 1. **Removed the outdated unsafe RLS rollback comment** from `supabase/migrations/20261118120000_add_strategy_ownership.sql`. It previously recommended `ALTER TABLE public.strategies DISABLE ROW LEVEL SECURITY;` as the post-cutover rollback — unsafe once real owned private rows exist (it would expose every one of them, not just restore pre-migration behavior), and never executed. Replaced with a pointer to the two actually-sanctioned, RLS-preserving procedures in `docs/AUTH_003A_ROLLBACK_PROCEDURES.md`. Committed this session (see commit below) — this is the one code change in this step.

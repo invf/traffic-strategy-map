@@ -2,35 +2,22 @@
 
 Continuing from `docs/AUTH_003C_PRODUCTION_RELEASE_PLAN.md` with the now-confirmed infrastructure facts (Session Pooler host/port, Render's deployment branch, `TRAFFIC_STRATEGY_MAP_DB_URL` still missing). **Nothing in this document has been executed against production.** No migration ran, no merge, no deploy, no OAuth setting changed, no entitlement granted. One real bug was found and fixed in two migration files this session — see Task 3 — and rehearsed against a real local Supabase stack before being written here.
 
-## Task 1 — Production backup preparation
+**Scope update**: the 3 existing `public.strategies` rows are confirmed disposable test data. Their preservation is no longer a release requirement, and no strategy-specific backup or ownership-assignment work was done for them. **This does not widen scope anywhere else** — it applies only to these 3 rows; nothing below deletes them or any other data, resets the project, or touches Launch Studio, ADVESER Platform, or Slovakia Operations. The migration's own behavior is unchanged by this: it was always `ADD COLUMN` only, never a row mutation, so it already leaves these rows unchanged and private (`user_id = NULL`, `is_demo = false`) exactly as preferred — nothing needed to change in the SQL itself for this update.
 
-### Procedure
-1. **Supabase's own backup** (the real safety net for schema *and* data together): Dashboard → Database → Backups. Confirm a recent automatic backup exists, or trigger a manual one if your plan tier supports it, immediately before Task 2 executes anything.
-2. **This repo's own row-level snapshot**, additionally, for a fast human-readable diff and a second independent copy:
-   ```bash
-   VITE_SUPABASE_ANON_KEY=<the real anon key> node scripts/backup-strategies.mjs
-   ```
-   `select=*` over PostgREST — captures every column including all four JSONB fields (`nodes`, `edges`, `product_info`, `ai_suggestions`) exactly as stored, not a partial projection. Works today because RLS is not yet enabled with owner-scoped policies that would otherwise restrict what the anon key can see (the current `"Allow all"` policy permits it). Writes a timestamped JSON file to `backups/` (gitignored — production data must never be committed). Re-run once more immediately *after* Task 2's migration completes, this time via a `service_role`-authenticated query (the anon key will no longer see ownerless rows once the new policies are live) — a second confirmation point, not a replacement for the Supabase backup above.
+## Task 1 — Production backup preparation (downgraded — no longer a release blocker)
 
-### Read-only verification SQL
-```sql
--- Row count and identifiers, captured BEFORE Task 2 runs
-SELECT id, name, created_at, updated_at,
-       (nodes IS NOT NULL) AS has_nodes,
-       (edges IS NOT NULL) AS has_edges,
-       (product_info IS NOT NULL) AS has_product_info,
-       (ai_suggestions IS NOT NULL) AS has_ai_suggestions,
-       jsonb_typeof(nodes) AS nodes_type,
-       jsonb_typeof(edges) AS edges_type
-FROM public.strategies
-ORDER BY created_at;
--- Expect exactly 3 rows. Record the 3 ids verbatim - Task 2's
--- post-migration check re-runs this exact query and compares.
-
-SELECT count(*) AS total_rows FROM public.strategies;
--- Expect 3.
+Per the scope update above, a strategy-specific backup is **not required** and was not performed this session. If you still want one as a convenience before proceeding (not required for GO), it remains available unchanged:
+```bash
+VITE_SUPABASE_ANON_KEY=<the real anon key> node scripts/backup-strategies.mjs
 ```
-Nothing above modifies or deletes any row — every statement in this task is a `SELECT` or an out-of-band read via PostgREST.
+A general Supabase project backup (Dashboard → Database → Backups) remains ordinary good practice before any production migration — covering the role/policy/table changes generally, not tied to these 3 rows specifically — but is likewise not treated as a gate here.
+
+### Read-only verification SQL (optional, informational only)
+```sql
+SELECT id, name, created_at FROM public.strategies ORDER BY created_at;
+SELECT count(*) AS total_rows FROM public.strategies;
+```
+Useful only if you want to see what's there before/after; not required, and their outcome does not gate GO/NO-GO below.
 
 ## Task 2 — Production migration
 
@@ -145,8 +132,12 @@ SELECT policyname, cmd FROM pg_policies WHERE schemaname = 'public' AND tablenam
 -- Expect exactly: delete own, insert own, read own or approved demo, update own.
 -- Zero rows named "Allow all".
 
-SELECT id, name FROM public.strategies WHERE id IN ('<id1>', '<id2>', '<id3>');
--- The exact 3 ids captured in Task 1 - all 3 present, name unchanged.
+SELECT count(*) AS total_rows, count(*) FILTER (WHERE user_id IS NULL AND is_demo = false) AS private_pending_review FROM public.strategies;
+-- Informational only (not a gate - the 3 existing rows are confirmed
+-- disposable test data per the updated scope). Expect the count to
+-- include whatever existed before migration 1, with user_id IS NULL
+-- and is_demo = false for all of them - confirming the migration's
+-- ADD COLUMN behavior, not a preservation requirement.
 
 SELECT table_schema, table_name, privilege_type FROM information_schema.role_table_grants
 WHERE grantee = 'traffic_strategy_map_app' ORDER BY table_schema, table_name, privilege_type;
@@ -207,12 +198,13 @@ The password itself is never printed here, was never typed into this session, an
 6. **Rollback procedure, RLS never disabled** — unchanged from `docs/AUTH_003A_ROLLBACK_PROCEDURES.md` (the stale comment recommending otherwise was already removed from the migration file in the prior commit this ticket continues from): (A) `REVOKE INSERT, UPDATE, DELETE ON public.strategies FROM authenticated;` to suspend writes while reads/isolation stay intact, or (B) fix one specific broken policy in place. Neither ever touches `ENABLE`/`DISABLE ROW LEVEL SECURITY`.
 7. **GO / NO-GO**:
 
-   **GO** — the migration plan is now more correct than it was at the start of this ticket (a real bug found and fixed, not just inspected), rehearsed clean end to end against a real local stack: **182 backend assertions, 48 real-local-Supabase-stack assertions** (3 rehearsal scripts, each on its own fresh reset), all passing after the fix. The connection-string template and role setup are fully specified.
+   **GO** — the migration plan is now more correct than it was at the start of this ticket (a real bug found and fixed, not just inspected), rehearsed clean end to end against a real local stack: **182 backend assertions, 48 real-local-Supabase-stack assertions** (3 rehearsal scripts, each on its own fresh reset), all passing after the fix. The connection-string template and role setup are fully specified. Per the updated data-preservation scope, Task 1's backup is no longer a gate either.
+
+   **SQL scope re-verified this pass**: every DDL/DML/grant statement across all 4 migration files, isolated from comments and re-read directly, touches only `public.strategies`, the two new `public.openai_*` tables, the one role `traffic_strategy_map_app`, and one `SELECT` grant on `adveser_core.user_product_entitlements` (schema-level `USAGE` plus that single table's `SELECT` — the schema itself is never altered, no other table in it is referenced). No `DROP SCHEMA`, no `TRUNCATE`, no unscoped `DELETE`, no wildcard grant, anywhere. Nothing references Launch Studio, Earn Studio, or Slovakia Operations' own schemas at all — they don't appear in any of the four files.
 
    **NO-GO, pending exactly these, none of which this session can do**:
    - Generate and set the `traffic_strategy_map_app` role's real production password (`ALTER ROLE ... PASSWORD ...`, out of band, immediately after migration 3).
    - Assemble and set the real `TRAFFIC_STRATEGY_MAP_DB_URL` in Render using Task 4's template with that real password.
-   - Take Task 1's fresh verified backup.
    - Explicit approval to execute Task 2's SQL against the real project.
    - (Carried over from the prior release plan, still unresolved) Confirm/merge whichever branch Render's `master` deployment actually needs, before any deploy — not part of this migration-specific ticket's own scope, but still a precondition for the backend ever running this corrected code at all.
 
