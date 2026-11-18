@@ -29,5 +29,10 @@ export function buildSignInUrl(returnTo) {
 }
 
 export async function signOut() {
-  await apiFetch('/auth/sso/logout', { method: 'POST' });
+  // The X-Requested-With header is required server-side (see
+  // backend/routes/ssoRoutes.js's own comment on its logout route) as
+  // a login-CSRF defense: it forces a CORS preflight that an
+  // attacker's cross-site page cannot pass, and a plain HTML form
+  // cannot set custom headers at all, so it blocks that vector outright.
+  await apiFetch('/auth/sso/logout', { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
 }

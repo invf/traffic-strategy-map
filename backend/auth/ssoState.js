@@ -9,8 +9,8 @@ const TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 let pending = new Map(); // state -> { codeVerifier, next, createdAt }
 
-export function createPendingAuthorization(state, { codeVerifier, next }) {
-  pending.set(state, { codeVerifier, next, createdAt: Date.now() });
+export function createPendingAuthorization(state, { codeVerifier, next, csrfToken }) {
+  pending.set(state, { codeVerifier, next, csrfToken, createdAt: Date.now() });
 }
 
 // Single-use: consuming a state deletes it immediately, regardless of

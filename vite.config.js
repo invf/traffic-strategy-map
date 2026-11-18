@@ -11,5 +11,9 @@ export default defineConfig({
     // Node scripts (run with `node`, not a test runner - see backend/
     // package.json's own convention) and must never be picked up here.
     include: ['src/**/*.test.{js,jsx}'],
+    // A fake backend origin so lib/api.js's isApiConfigured/apiFetch
+    // guards don't short-circuit in tests that mock global fetch -
+    // no real network call is ever made against this value.
+    env: { VITE_API_URL: 'http://backend.test' },
   },
 });

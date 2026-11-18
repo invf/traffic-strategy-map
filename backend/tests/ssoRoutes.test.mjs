@@ -10,7 +10,7 @@ import express from 'express';
 import request from 'supertest';
 import { createSsoRouter } from '../routes/ssoRoutes.js';
 import { OAuthProtocolError, AccessTokenVerificationError } from '../auth/oauthClient.js';
-import { getSsoSession, __resetSsoSessionStoreForTests, createSsoSession, mintSessionToken, signSessionToken, SSO_COOKIE_NAME } from '../auth/ssoSession.js';
+import { getSsoSession, __resetSsoSessionStoreForTests, createSsoSession, mintSessionToken, signSessionToken, SSO_COOKIE_NAME, OAUTH_CSRF_COOKIE_NAME } from '../auth/ssoSession.js';
 import { __resetPendingAuthorizationsForTests } from '../auth/ssoState.js';
 
 process.env.TRAFFIC_STRATEGY_MAP_SESSION_SECRET = process.env.TRAFFIC_STRATEGY_MAP_SESSION_SECRET || 'test-only-session-secret-do-not-use-in-production';
@@ -54,6 +54,17 @@ function extractStateFromRedirect(location) {
   const state = url.searchParams.get('state');
   if (!state) throw new Error('No state in redirect URL - test setup is broken.');
   return state;
+}
+
+// AUTH-003B security correction: /auth/sso/callback now also requires
+// the login-CSRF cookie that /auth/sso/start sets - every test that
+// drives a real start -> callback round trip must carry it forward,
+// the same way a real browser would.
+function extractOauthCsrfCookie(startRes) {
+  const setCookie = startRes.headers['set-cookie'] ?? [];
+  const raw = setCookie.find((c) => c.startsWith(`${OAUTH_CSRF_COOKIE_NAME}=`));
+  if (!raw) throw new Error('No OAuth CSRF cookie in /start response - test setup is broken.');
+  return raw.split(';')[0];
 }
 
 async function run() {
@@ -106,8 +117,9 @@ async function run() {
     const app = makeApp(fakeDeps());
     const startRes = await request(app).get('/auth/sso/start?return_to=%2Fdashboard');
     const state = extractStateFromRedirect(startRes.headers.location);
+    const csrfCookie = extractOauthCsrfCookie(startRes);
 
-    const callbackRes = await request(app).get(`/auth/sso/callback?code=a-fresh-code&state=${state}`);
+    const callbackRes = await request(app).get(`/auth/sso/callback?code=a-fresh-code&state=${state}`).set('Cookie', csrfCookie);
     assert(callbackRes.status === 302, 'callback happy path: redirects');
     assert(callbackRes.headers.location === 'https://frontend.example.com/dashboard', 'callback happy path: redirects to the FRONTEND origin + the original return_to path, not this backend');
     const setCookie = callbackRes.headers['set-cookie'] ?? [];
@@ -115,6 +127,7 @@ async function run() {
     assert(setCookie.some((c) => c.includes('HttpOnly')), 'callback happy path: the cookie is HttpOnly');
     assert(setCookie.some((c) => c.includes('SameSite=None') && c.includes('Secure')), 'callback happy path: the cookie is SameSite=None; Secure - required for this cross-origin (Vercel/Render) architecture, unlike Launch Studio\'s own SameSite=Lax monolith cookie');
     assert(!setCookie.some((c) => c.includes('fake-access-token') || c.includes('fake-refresh-token')), 'callback happy path: the RAW OAuth access/refresh tokens never appear in the cookie value');
+    assert(setCookie.some((c) => c.startsWith(`${OAUTH_CSRF_COOKIE_NAME}=;`) || (c.startsWith(`${OAUTH_CSRF_COOKIE_NAME}=`) && c.includes('Max-Age=0'))), 'callback happy path: the OAuth login-CSRF cookie is cleared once consumed, never left sitting around');
   }
 
   // ===== Reused state is rejected =====
@@ -124,10 +137,35 @@ async function run() {
     const app = makeApp(fakeDeps());
     const startRes = await request(app).get('/auth/sso/start');
     const state = extractStateFromRedirect(startRes.headers.location);
-    const first = await request(app).get(`/auth/sso/callback?code=a-code&state=${state}`);
+    const csrfCookie = extractOauthCsrfCookie(startRes);
+    const first = await request(app).get(`/auth/sso/callback?code=a-code&state=${state}`).set('Cookie', csrfCookie);
     assert(first.status === 302 && first.headers.location === 'https://frontend.example.com/', 'reuse test: the FIRST callback with this state succeeds');
-    const second = await request(app).get(`/auth/sso/callback?code=a-code&state=${state}`);
+    const second = await request(app).get(`/auth/sso/callback?code=a-code&state=${state}`).set('Cookie', csrfCookie);
     assert(second.status === 302 && second.headers.location === 'https://frontend.example.com/?sso_error=invalid_state', 'reuse test: REPLAYING the exact same callback URL is rejected');
+  }
+
+  // ===== AUTH-003B security correction: login-CSRF - missing/wrong anti-CSRF cookie is rejected even with a perfectly valid code+state =====
+  {
+    __resetPendingAuthorizationsForTests();
+    const app = makeApp(fakeDeps());
+    const startRes = await request(app).get('/auth/sso/start');
+    const state = extractStateFromRedirect(startRes.headers.location);
+    let exchangeCalled = false;
+    const appNoExchange = makeApp(fakeDeps({ exchangeCodeForTokens: async () => { exchangeCalled = true; throw new Error('should never be called'); } }));
+    // Reuse the SAME state/pending-authorization record (stored at module level in ssoState.js,
+    // shared across app instances in this test file) but deliberately send NO CSRF cookie -
+    // simulates an attacker replaying a captured callback URL from a DIFFERENT browser.
+    const res = await request(appNoExchange).get(`/auth/sso/callback?code=attacker-captured-code&state=${state}`);
+    assert(res.status === 302 && res.headers.location === 'https://frontend.example.com/?sso_error=invalid_state', 'callback: a missing OAuth login-CSRF cookie is rejected as invalid_state, even with an otherwise-valid, not-yet-consumed code+state pair');
+    assert(!exchangeCalled, 'callback: the token endpoint is never reached when the login-CSRF check fails - the exchange must not run on an unproven browser');
+  }
+  {
+    __resetPendingAuthorizationsForTests();
+    const app = makeApp(fakeDeps());
+    const startRes = await request(app).get('/auth/sso/start');
+    const state = extractStateFromRedirect(startRes.headers.location);
+    const res = await request(app).get(`/auth/sso/callback?code=a-code&state=${state}`).set('Cookie', `${OAUTH_CSRF_COOKIE_NAME}=completely-wrong-value`);
+    assert(res.status === 302 && res.headers.location === 'https://frontend.example.com/?sso_error=invalid_state', 'callback: a WRONG (mismatched, not just missing) OAuth login-CSRF cookie value is rejected the same way');
   }
 
   // ===== Token exchange failure =====
@@ -136,7 +174,8 @@ async function run() {
     const app = makeApp(fakeDeps({ exchangeCodeForTokens: async () => { throw new OAuthProtocolError('invalid_grant', 'Code has expired.'); } }));
     const startRes = await request(app).get('/auth/sso/start');
     const state = extractStateFromRedirect(startRes.headers.location);
-    const res = await request(app).get(`/auth/sso/callback?code=expired-code&state=${state}`);
+    const csrfCookie = extractOauthCsrfCookie(startRes);
+    const res = await request(app).get(`/auth/sso/callback?code=expired-code&state=${state}`).set('Cookie', csrfCookie);
     assert(res.status === 302 && res.headers.location === 'https://frontend.example.com/?sso_error=token_exchange_failed', 'callback: a token-endpoint failure redirects with sso_error=token_exchange_failed');
   }
 
@@ -146,7 +185,8 @@ async function run() {
     const app = makeApp(fakeDeps({ verifyAccessTokenForClient: async () => { throw new AccessTokenVerificationError('Access token failed verification.'); } }));
     const startRes = await request(app).get('/auth/sso/start');
     const state = extractStateFromRedirect(startRes.headers.location);
-    const res = await request(app).get(`/auth/sso/callback?code=a-code&state=${state}`);
+    const csrfCookie = extractOauthCsrfCookie(startRes);
+    const res = await request(app).get(`/auth/sso/callback?code=a-code&state=${state}`).set('Cookie', csrfCookie);
     assert(res.status === 302 && res.headers.location === 'https://frontend.example.com/?sso_error=verification_failed', 'callback: a verification failure redirects with sso_error=verification_failed, never establishes a session');
   }
 
@@ -193,14 +233,29 @@ async function run() {
     const { sid } = createSsoSession({ userId: 'user-d', email: 'd@example.com', refreshToken: 'rt-d' });
     const token = mintSessionToken(sid, 'user-d', 'd@example.com');
     const app = makeApp(fakeDeps());
-    const res = await request(app).post('/auth/sso/logout').set('Cookie', `${SSO_COOKIE_NAME}=${token}`);
+    const res = await request(app).post('/auth/sso/logout').set('Cookie', `${SSO_COOKIE_NAME}=${token}`).set('X-Requested-With', 'XMLHttpRequest');
     assert(res.status === 200 && res.body.success === true, 'logout: returns success');
     assert(getSsoSession(sid) === undefined, 'logout: deletes the server-side session record');
   }
   {
     const app = makeApp(fakeDeps());
-    const res = await request(app).post('/auth/sso/logout');
+    const res = await request(app).post('/auth/sso/logout').set('X-Requested-With', 'XMLHttpRequest');
     assert(res.status === 200 && res.body.success === true, 'logout: calling logout with no session at all is a safe no-op');
+  }
+
+  // ===== AUTH-003B security correction: login-CSRF ("forced logout") - the required header blocks a cross-site-forgeable request =====
+  {
+    __resetSsoSessionStoreForTests();
+    const { sid } = createSsoSession({ userId: 'user-f', email: 'f@example.com', refreshToken: 'rt-f' });
+    const token = mintSessionToken(sid, 'user-f', 'f@example.com');
+    const app = makeApp(fakeDeps());
+    // No X-Requested-With - exactly what a plain cross-site <form method="POST"> or a
+    // bodyless credentialed fetch from an attacker's page would send; the SameSite=None
+    // session cookie would still be attached by the browser, so the header check is the
+    // only thing standing between this and a forced logout.
+    const res = await request(app).post('/auth/sso/logout').set('Cookie', `${SSO_COOKIE_NAME}=${token}`);
+    assert(res.status === 403, 'logout: a request missing the required X-Requested-With header is rejected (403), not treated as a valid logout');
+    assert(getSsoSession(sid) !== undefined, 'logout: the session record survives - a forged logout attempt must never actually log the real user out');
   }
 
   // ===== AUTH-001 Phase 4B (ported): a reused cookie after logout is rejected =====
@@ -209,7 +264,7 @@ async function run() {
     const { sid } = createSsoSession({ userId: 'user-e', email: 'e@example.com', refreshToken: 'rt-e' });
     const token = mintSessionToken(sid, 'user-e', 'e@example.com');
     const app = makeApp(fakeDeps());
-    await request(app).post('/auth/sso/logout').set('Cookie', `${SSO_COOKIE_NAME}=${token}`);
+    await request(app).post('/auth/sso/logout').set('Cookie', `${SSO_COOKIE_NAME}=${token}`).set('X-Requested-With', 'XMLHttpRequest');
     const res = await request(app).get('/auth/sso/session').set('Cookie', `${SSO_COOKIE_NAME}=${token}`);
     assert(res.status === 200 && res.body.authenticated === false, 'The SAME still-cryptographically-valid cookie, reused after logout, reports authenticated:false - signature+exp validity alone does not imply an active session (the fix this engagement already proved necessary for Launch Studio, ported here from the start)');
   }

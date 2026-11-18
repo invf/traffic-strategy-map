@@ -1,3 +1,5 @@
+import { refreshSsoSession } from '../lib/api.js';
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 const LANG_NAMES = { en: 'English', uk: 'Ukrainian', ru: 'Russian' };
@@ -188,7 +190,7 @@ function validateResponse(data) {
 export async function generateStrategyWithAI(productInfo, language = 'en') {
   if (!API_URL) throw new Error('VITE_API_URL не вказано у .env');
 
-  const res = await fetch(`${API_URL}/api/openai`, {
+  const requestInit = {
     method: 'POST',
     // AUTH-003B - /api/openai now authenticates via this app's own
     // first-party SSO cookie (requireSsoAuth), not an anonymous call -
@@ -207,7 +209,20 @@ export async function generateStrategyWithAI(productInfo, language = 'en') {
         { role: 'user',   content: buildUserPrompt(productInfo) },
       ],
     }),
-  });
+  };
+
+  let res = await fetch(`${API_URL}/api/openai`, requestInit);
+  if (res.status === 401) {
+    // AUTH-003B pre-production audit: the session cookie can expire
+    // (15 min) while a tab sits open with no reload - GET /auth/sso/session
+    // silently refreshes it server-side if the underlying OAuth refresh
+    // token is still valid; retry exactly once rather than forcing a
+    // full re-login for what is otherwise still a valid signed-in user.
+    const session = await refreshSsoSession();
+    if (session.authenticated) {
+      res = await fetch(`${API_URL}/api/openai`, requestInit);
+    }
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

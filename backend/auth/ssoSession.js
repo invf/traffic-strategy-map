@@ -21,7 +21,22 @@
 // origins - SameSite=Lax would NOT be sent on the frontend's own
 // cross-origin fetch() calls to this backend. This cookie uses
 // SameSite=None (which browsers require to be paired with Secure) -
-// correct for this split architecture, not a stylistic choice.
+// correct for this split-origin architecture, not a stylistic choice.
+//
+// Pre-production audit finding (see docs/AUTH_003B_PRE_PRODUCTION_AUDIT.md):
+// SameSite=None does NOT make this cookie reliable everywhere - Safari
+// blocks ALL third-party cookies unconditionally (no SameSite=None
+// exception exists), and Firefox's default Total Cookie Protection
+// partitions storage per top-level site, so a cookie set while
+// backend.onrender.com is briefly the top-level site (during the OAuth
+// redirect) is invisible to a later cross-site fetch from
+// frontend.vercel.app. Only default Chrome currently works reliably.
+// The durable fix is an ADVESER-controlled same-origin reverse proxy
+// (frontend and backend under one registrable domain) - once that is
+// live, this cookie should become SameSite=Lax, which is why the value
+// is configurable (TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE) rather than
+// hardcoded: flipping the deployment architecture should be an env var
+// change here, not a code change.
 //
 // In-memory session-record store: same documented trade-off as
 // Launch Studio - a process restart drops in-flight SSO sessions;
@@ -95,28 +110,82 @@ export function verifySessionToken(token, options = {}) {
   return payload;
 }
 
-export function readSessionCookie(cookieHeader) {
+// Generic cookie-by-name reader, used for both this app's session
+// cookie and (AUTH-003B security correction, see below) its separate
+// OAuth login-CSRF cookie.
+export function readCookie(cookieHeader, name) {
   if (!cookieHeader) return null;
   for (const part of cookieHeader.split(';')) {
     const eq = part.indexOf('=');
     if (eq === -1) continue;
-    const name = part.slice(0, eq).trim();
-    if (name === SSO_COOKIE_NAME) return part.slice(eq + 1).trim();
+    const cookieName = part.slice(0, eq).trim();
+    if (cookieName === name) return part.slice(eq + 1).trim();
   }
   return null;
 }
 
-// SameSite=None + Secure unconditionally - this is cross-origin by
-// architecture (Vercel frontend, Render backend), not just in
-// production. A real browser will refuse SameSite=None without
-// Secure, so local HTTP-only testing of the full cross-origin cookie
-// flow isn't possible without HTTPS - the route logic itself is tested
-// directly (supertest), not through two real browser origins.
+export function readSessionCookie(cookieHeader) {
+  return readCookie(cookieHeader, SSO_COOKIE_NAME);
+}
+
+// Defaults to None (today's split-origin reality). Set
+// TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE=Lax once frontend and backend
+// are served from the same registrable domain via a reverse proxy
+// (see docs/AUTH_003B_PRE_PRODUCTION_AUDIT.md's recommended
+// architecture) - Lax is sufficient and strictly safer (real CSRF
+// protection, not just a "None is required for cross-origin" default)
+// once there is no cross-origin fetch left for it to break. An invalid
+// value fails closed to 'None' rather than silently producing a
+// malformed Set-Cookie header.
+function getCookieSameSite() {
+  const value = process.env.TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE;
+  if (value === 'Lax' || value === 'Strict') return value;
+  return 'None';
+}
+
+// Secure unconditionally - required by every browser whenever
+// SameSite=None is used, and simply correct regardless of SameSite
+// otherwise (this app is never served over plain HTTP). A real browser
+// will refuse SameSite=None without Secure, so local HTTP-only testing
+// of the full cross-origin cookie flow isn't possible without HTTPS -
+// the route logic itself is tested directly (supertest), not through
+// two real browser origins.
 export function buildSessionCookieHeader(token) {
-  return `${SSO_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`;
+  return `${SSO_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=${getCookieSameSite()}; Secure; Max-Age=${SESSION_COOKIE_MAX_AGE_SECONDS}`;
 }
 export function buildClearSessionCookieHeader() {
-  return `${SSO_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0`;
+  return `${SSO_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=${getCookieSameSite()}; Secure; Max-Age=0`;
+}
+
+// AUTH-003B security correction (pre-production audit): a separate,
+// short-lived cookie set at /auth/sso/start and checked at
+// /auth/sso/callback - the OAuth login-CSRF defense. Without this, the
+// `state` parameter alone does not prove the SAME BROWSER that started
+// the flow is the one completing it: pkce.js's isValidState() was
+// imported for exactly this comparison but was never actually wired
+// up anywhere, so nothing enforced it. An attacker can complete their
+// OWN consent, capture the resulting `code`+`state` from their own
+// browser, and hand that exact callback URL to a victim - without this
+// cookie, the backend has no way to tell that replay apart from a
+// genuine completion, and would sign the victim into the attacker's
+// account (a classic "login CSRF").
+//
+// SameSite=Lax (not None) is correct and sufficient here, unlike the
+// session cookie: it only needs to survive a TOP-LEVEL GET navigation
+// returning from Supabase's redirect chain, which Lax already allows -
+// it is never read via a cross-site fetch/XHR the way the session
+// cookie is, so it needs no broader exposure.
+export const OAUTH_CSRF_COOKIE_NAME = 'tsm_oauth_csrf';
+const OAUTH_CSRF_COOKIE_MAX_AGE_SECONDS = 10 * 60; // matches ssoState.js's pending-authorization TTL
+
+export function readOauthCsrfCookie(cookieHeader) {
+  return readCookie(cookieHeader, OAUTH_CSRF_COOKIE_NAME);
+}
+export function buildOauthCsrfCookieHeader(token) {
+  return `${OAUTH_CSRF_COOKIE_NAME}=${token}; Path=/auth/sso; HttpOnly; SameSite=Lax; Secure; Max-Age=${OAUTH_CSRF_COOKIE_MAX_AGE_SECONDS}`;
+}
+export function buildClearOauthCsrfCookieHeader() {
+  return `${OAUTH_CSRF_COOKIE_NAME}=; Path=/auth/sso; HttpOnly; SameSite=Lax; Secure; Max-Age=0`;
 }
 
 // ---- Server-side session record store ----

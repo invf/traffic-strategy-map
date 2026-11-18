@@ -18,7 +18,25 @@ export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetch
   // must be a real, specific origin whenever ssoRouter/cookies are in
   // play - acceptable here since this app always configures
   // FRONTEND_URL for its one real frontend.
-  app.use(cors({ origin: frontendUrl, methods: ['GET', 'POST', 'OPTIONS'], credentials: true }));
+  //
+  // Pre-production audit correction: PATCH and DELETE were missing
+  // here even though the strategies proxy uses both (edit/delete a
+  // strategy) - a real browser's preflight would have rejected those
+  // requests outright (the Access-Control-Allow-Methods response
+  // wouldn't list them), a bug the existing supertest-based tests never
+  // caught because supertest calls routes directly, bypassing the
+  // browser's own CORS preflight enforcement entirely.
+  //
+  // allowedHeaders lists Content-Type (every JSON request body) and
+  // X-Requested-With (the CSRF defense on POST /auth/sso/logout - see
+  // its own route comment) - an unlisted header fails preflight the
+  // same way an unlisted method does, so both must be explicit.
+  app.use(cors({
+    origin: frontendUrl,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'X-Requested-With'],
+    credentials: true,
+  }));
   app.use(express.json({ limit: '256kb' }));
 
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));

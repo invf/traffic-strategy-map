@@ -29,12 +29,19 @@ import {
   readSessionCookie,
   buildSessionCookieHeader,
   buildClearSessionCookieHeader,
+  readOauthCsrfCookie,
+  buildOauthCsrfCookieHeader,
+  buildClearOauthCsrfCookieHeader,
   runSingleFlightRefresh,
   isSessionActive,
   InvalidSessionTokenError,
 } from '../auth/ssoSession.js';
 
 function redirectWithError(res, frontendUrl, code) {
+  // Always clear the OAuth login-CSRF cookie on any error exit from
+  // this flow, whether or not it was ever set (harmless either way) -
+  // never leave a stale one sitting around for a retried attempt.
+  res.setHeader('Set-Cookie', buildClearOauthCsrfCookieHeader());
   res.redirect(`${frontendUrl}/?sso_error=${code}`);
 }
 
@@ -128,7 +135,12 @@ export function createSsoRouter(deps = {}) {
     const codeChallenge = generateCodeChallenge(codeVerifier);
     const state = generateState();
     const next = sanitizeReturnTo(req.query.return_to);
-    createPendingAuthorization(state, { codeVerifier, next });
+    // AUTH-003B security correction: a login-CSRF defense independent
+    // of the OAuth `state` param itself - see ssoSession.js's own
+    // comment on OAUTH_CSRF_COOKIE_NAME for the attack this closes.
+    const csrfToken = generateState();
+    createPendingAuthorization(state, { codeVerifier, next, csrfToken });
+    res.setHeader('Set-Cookie', buildOauthCsrfCookieHeader(csrfToken));
     res.redirect(buildAuthorizationUrl(config, { state, codeChallenge }));
   });
 
@@ -142,6 +154,21 @@ export function createSsoRouter(deps = {}) {
     }
     const pending = consumePendingAuthorization(state);
     if (!pending) {
+      return redirectWithError(res, frontendUrl, 'invalid_state');
+    }
+
+    // AUTH-003B security correction: proves the browser completing this
+    // callback is the SAME ONE that initiated /auth/sso/start - the
+    // `state` param alone does not, since it is attacker-controlled
+    // input that can be lifted from a captured callback URL. Without
+    // this, a login-CSRF attack is possible: an attacker completes
+    // their own consent, captures their own valid code+state, and
+    // sends that exact callback URL to a victim, who would otherwise
+    // be signed into the ATTACKER's account. See ssoSession.js's own
+    // comment on OAUTH_CSRF_COOKIE_NAME.
+    const csrfCookie = readOauthCsrfCookie(req.headers.cookie);
+    if (!isValidState(csrfCookie, pending.csrfToken)) {
+      console.error('[sso/callback] OAuth login-CSRF check failed: missing or mismatched tsm_oauth_csrf cookie.');
       return redirectWithError(res, frontendUrl, 'invalid_state');
     }
 
@@ -172,7 +199,9 @@ export function createSsoRouter(deps = {}) {
     const { sid } = createSsoSession({ userId: claims.sub, email: claims.email, refreshToken: tokens.refresh_token });
     cacheAccessToken(sid, tokens.access_token, tokens.expires_in ?? 3600);
     const token = mintSessionToken(sid, claims.sub, claims.email);
-    res.setHeader('Set-Cookie', buildSessionCookieHeader(token));
+    // Two distinct Set-Cookie headers in one response - Node/Express
+    // support this via an array, each cookie name independent of the other.
+    res.setHeader('Set-Cookie', [buildSessionCookieHeader(token), buildClearOauthCsrfCookieHeader()]);
     res.redirect(`${frontendUrl}${pending.next}`);
   });
 
@@ -228,6 +257,19 @@ export function createSsoRouter(deps = {}) {
   });
 
   router.post('/auth/sso/logout', (req, res) => {
+    // AUTH-003B security correction: this route has no JSON body and
+    // no non-simple method, so (unlike the strategies proxy's
+    // POST/PATCH/DELETE, whose JSON Content-Type or method already
+    // forces a CORS preflight) a plain cross-site <form method="POST">
+    // or bodyless fetch would otherwise reach this handler with the
+    // SameSite=None session cookie attached - a login-CSRF-shaped
+    // "forced logout." Requiring a custom header forces a preflight
+    // for script-based attempts (app.js's CORS only allows the real
+    // frontend origin), and a plain HTML form cannot set custom
+    // headers at all, so this also blocks the form vector outright.
+    if (req.headers['x-requested-with'] !== 'XMLHttpRequest') {
+      return res.status(403).json({ error: { message: 'Missing required header.' } });
+    }
     const cookie = readSessionCookie(req.headers.cookie);
     if (cookie) {
       try {
