@@ -4,6 +4,7 @@ import { createSsoRouter, ensureValidAccessToken } from './routes/ssoRoutes.js';
 import { createStrategiesRouter } from './routes/strategiesProxy.js';
 import { requireSsoAuth } from './middleware/requireSsoAuth.js';
 import { createRequireEntitlement } from './middleware/requireEntitlement.js';
+import { createRequireProductEntitlement } from './middleware/requireProductEntitlement.js';
 import { requireDisabled } from './middleware/requireDisabled.js';
 import { checkEntitlement, checkQuota, recordUsage } from './lib/entitlements.js';
 import { validateDailyQuota } from './lib/validateDailyQuota.js';
@@ -41,39 +42,57 @@ const oauthClientConfigured = !!(
   process.env.TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_SECRET &&
   process.env.TRAFFIC_STRATEGY_MAP_OAUTH_REDIRECT_URI
 );
+// AUTH-003B pre-deployment audit fix: checkEntitlement/checkQuota both
+// need a real Postgres connection (lib/entitlements.js's getPool()) -
+// previously absent from this readiness check entirely, so the
+// startup log could claim "/api/openai running with ... per-user
+// entitlement + durable quota" while every real request actually
+// 503'd the moment getPool() threw on the missing connection string.
+// Now load-bearing here, not just a lazily-discovered runtime failure.
+const dbUrlConfigured = !!process.env.TRAFFIC_STRATEGY_MAP_DB_URL;
 
 let requireAuth;
 let requireEntitlement;
 
-if (oauthClientConfigured && sessionSecretConfigured) {
+if (oauthClientConfigured && sessionSecretConfigured && dbUrlConfigured) {
   requireAuth = requireSsoAuth;
   requireEntitlement = createRequireEntitlement({ checkEntitlement, checkQuota, ...(dailyLimit ? { dailyLimit } : {}) });
   console.log('[server] /api/openai running with full SSO cookie auth + per-user entitlement + durable quota.');
 } else {
   requireAuth = requireDisabled;
   requireEntitlement = (_req, _res, next) => next(); // never reached - requireDisabled always responds first
-  console.warn('[server] SSO is not fully configured (OAuth client and/or TRAFFIC_STRATEGY_MAP_SESSION_SECRET missing) - /api/openai is DISABLED (503 for every request, OpenAI is never called). See docs/AUTH_003A_OAUTH_CLIENT_SETUP.md and docs/AUTH_003B_IMPLEMENTATION_TICKET.md.');
+  console.warn('[server] SSO is not fully configured (OAuth client, TRAFFIC_STRATEGY_MAP_SESSION_SECRET, and/or TRAFFIC_STRATEGY_MAP_DB_URL missing) - /api/openai is DISABLED (503 for every request, OpenAI is never called). See docs/AUTH_003A_OAUTH_CLIENT_SETUP.md and docs/AUTH_003B_IMPLEMENTATION_TICKET.md.');
 }
 
 // AUTH-003B - the strategies proxy needs a real Supabase access token
 // (via ensureValidAccessToken), which in turn needs a configured OAuth
-// client, PLUS the project's own URL and anon key to reach PostgREST.
-// Same "absent, not silently degraded" discipline as /api/openai above:
-// without all of this, the routes are simply not mounted (404), rather
-// than mounted and failing open or closed in some less legible way.
+// client, PLUS the project's own URL and anon key to reach PostgREST,
+// PLUS (pre-deployment audit fix) TRAFFIC_STRATEGY_MAP_DB_URL for the
+// entitlement check below. Same "absent, not silently degraded"
+// discipline as /api/openai above: without all of this, the routes
+// are simply not mounted (404), rather than mounted and failing open
+// or closed in some less legible way.
 const strategiesProxyConfigured = !!(
   oauthClientConfigured &&
   sessionSecretConfigured &&
+  dbUrlConfigured &&
   process.env.SUPABASE_URL &&
   process.env.SUPABASE_ANON_KEY
 );
 
 let strategiesRouter;
+let requireProductEntitlement;
 if (strategiesProxyConfigured) {
   strategiesRouter = createStrategiesRouter({ ensureValidAccessToken });
-  console.log('[server] /api/strategies proxy is active (authenticated strategy saving/loading via the SSO session).');
+  // AUTH-003B pre-deployment audit fix: confirming identity
+  // (requireSsoAuth) is not the same as confirming this account holds
+  // the traffic_strategy_map entitlement - nothing previously checked
+  // that. Entitlement-only, never the OpenAI quota middleware above -
+  // strategies CRUD is not a metered resource.
+  requireProductEntitlement = createRequireProductEntitlement({ checkEntitlement });
+  console.log('[server] /api/strategies proxy is active (authenticated, entitlement-checked strategy saving/loading via the SSO session).');
 } else {
-  console.warn('[server] /api/strategies proxy is NOT mounted (OAuth client, session secret, SUPABASE_URL, and/or SUPABASE_ANON_KEY missing) - the frontend must keep using its existing direct-Supabase save/load flow until this is configured.');
+  console.warn('[server] /api/strategies proxy is NOT mounted (OAuth client, session secret, TRAFFIC_STRATEGY_MAP_DB_URL, SUPABASE_URL, and/or SUPABASE_ANON_KEY missing) - the frontend must keep using its existing direct-Supabase save/load flow until this is configured.');
 }
 
 const app = createApp({
@@ -84,6 +103,7 @@ const app = createApp({
   frontendUrl: process.env.FRONTEND_URL || '*',
   ssoRouter,
   requireSsoAuth,
+  requireProductEntitlement,
   strategiesRouter,
 });
 

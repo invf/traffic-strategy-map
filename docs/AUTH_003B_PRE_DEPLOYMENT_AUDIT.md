@@ -118,7 +118,9 @@ f8fbf06230f528ceccff26ed6957a1163a7b8a95
 ```
 `main` is unaffected, at `cea1494f895e4e6844ea406bdc191e3c1317b54c` — confirms nothing has been merged.
 
-## 4. Strategies API entitlement enforcement — FINDING (blocking)
+## 4. Strategies API entitlement enforcement — FINDING (blocking), FIXED
+
+**FIXED**: `backend/middleware/requireProductEntitlement.js` (new) is now mounted ahead of `strategiesRouter` in `app.js`, exactly as scoped below. See `docs/AUTH_003B_FIX_STRATEGIES_ENTITLEMENT.md` for the implementation, the corrected production migration this fix also required (an explicit `"Allow all"` RLS policy removal, confirmed necessary - not cosmetic - by rehearsal), and the full test/verification results. Original finding preserved below for the record.
 
 **The strategies API does not check product entitlement at all.** Traced the exact mount order in `backend/app.js`:
 ```js

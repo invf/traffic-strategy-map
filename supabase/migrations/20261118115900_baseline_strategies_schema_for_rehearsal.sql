@@ -29,3 +29,17 @@ CREATE TABLE public.strategies (
 -- write access too - reproduced here so the rehearsal's "before" state
 -- matches reality, not a guess.
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.strategies TO anon, authenticated;
+
+-- AUTH-003B pre-deployment audit correction: production's existing
+-- access control is RLS-based (an "Allow all" policy), not bare GRANTs
+-- with RLS left disabled - this rehearsal baseline previously modeled
+-- only the GRANT, which made the ownership migration's own correctness
+-- (it must explicitly DROP this policy, not just add new ones - RLS
+-- policies for the same command are OR'd together, so a surviving
+-- permissive policy would silently defeat every new owner-scoped one)
+-- impossible to actually rehearse. This reproduces the real shape.
+ALTER TABLE public.strategies ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON public.strategies
+  FOR ALL
+  USING (true)
+  WITH CHECK (true);

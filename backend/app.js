@@ -8,7 +8,7 @@
 import express from 'express';
 import cors from 'cors';
 
-export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetchImpl = fetch, recordUsage, frontendUrl = '*', ssoRouter, requireSsoAuth, strategiesRouter }) {
+export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetchImpl = fetch, recordUsage, frontendUrl = '*', ssoRouter, requireSsoAuth, requireProductEntitlement, strategiesRouter }) {
   const app = express();
 
   // AUTH-003B: credentials: true is required for the cross-origin SSO
@@ -74,8 +74,17 @@ export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetch
   // these routes simply don't exist (404), the same "absent, not
   // silently degraded" discipline as every other not-yet-configured
   // piece of this app.
-  if (strategiesRouter && requireSsoAuth) {
-    app.use(requireSsoAuth, strategiesRouter);
+  //
+  // AUTH-003B pre-deployment audit fix: requireProductEntitlement runs
+  // AFTER requireSsoAuth (needs req.userId, which only requireSsoAuth
+  // sets) and BEFORE strategiesRouter - confirming identity is not the
+  // same as confirming this account actually holds the
+  // traffic_strategy_map entitlement, which nothing previously
+  // checked. Required in this `if` alongside requireSsoAuth: an
+  // unconfigured/misconfigured entitlement check must leave these
+  // routes unmounted (404), never mounted but silently open.
+  if (strategiesRouter && requireSsoAuth && requireProductEntitlement) {
+    app.use(requireSsoAuth, requireProductEntitlement, strategiesRouter);
   }
 
   app.post('/api/openai', requireAuth, requireEntitlement, async (req, res) => {
