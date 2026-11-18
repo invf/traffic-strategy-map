@@ -3,6 +3,7 @@ import { X, Zap, Map, Sparkles, Globe2, Target, DollarSign, Users, AlertCircle }
 import { useStore } from '../store/useStore';
 import { generateAISuggestions } from '../data/mockData';
 import { generateStrategyWithAI } from '../services/openai';
+import { errorKeyForStatus } from '../lib/apiErrors';
 import { useTranslation } from '../i18n/useTranslation';
 
 const GOAL_VALUES = ['traffic', 'sales', 'signups', 'installs', 'subscribers'];
@@ -67,7 +68,11 @@ export default function ProductSetupModal() {
       setAiSuggestions(result.aiSuggestions || generateAISuggestions(form));
     } catch (err) {
       console.error('AI generation failed:', err);
-      setGenError(err.message || 'Помилка AI. Використовую базову стратегію.');
+      // AUTH-003B: a known auth/quota/availability status gets the
+      // same translated wording as the strategies proxy; anything else
+      // falls back to whatever the backend said.
+      const key = errorKeyForStatus(err?.status);
+      setGenError(key ? t(key) : (err.message || 'Помилка AI. Використовую базову стратегію.'));
       // Fallback to mock data
       generateMap(form);
       setAiSuggestions(generateAISuggestions(form));

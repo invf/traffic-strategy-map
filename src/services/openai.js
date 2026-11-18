@@ -190,6 +190,10 @@ export async function generateStrategyWithAI(productInfo, language = 'en') {
 
   const res = await fetch(`${API_URL}/api/openai`, {
     method: 'POST',
+    // AUTH-003B - /api/openai now authenticates via this app's own
+    // first-party SSO cookie (requireSsoAuth), not an anonymous call -
+    // credentials: 'include' is required for the browser to send it.
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
     },
@@ -207,7 +211,9 @@ export async function generateStrategyWithAI(productInfo, language = 'en') {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `OpenAI помилка ${res.status}`);
+    const thrown = new Error(err?.error?.message || `OpenAI помилка ${res.status}`);
+    thrown.status = res.status;
+    throw thrown;
   }
 
   const json = await res.json();

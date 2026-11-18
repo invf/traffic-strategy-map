@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useTranslation } from '../i18n/useTranslation';
+import AccountButton from './AccountButton';
 
 const NAV_IDS = ['map', 'traffic', 'ai'];
 const NAV_ICONS = { map: Map, traffic: Globe2, ai: BrainCircuit };
@@ -524,6 +525,9 @@ export default function TopBar() {
         >
           <Cloud size={15} />
         </button>
+
+        {/* ADVESER Account sign-in/out (AUTH-003B) */}
+        <AccountButton />
 
         {/* Background picker — only on map view */}
         {activeView === 'map' && (

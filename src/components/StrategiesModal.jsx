@@ -1,11 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import {
   X, Cloud, Save, FolderOpen, Trash2, RefreshCw,
-  Check, AlertCircle, Loader2, Database, Map,
+  Check, AlertCircle, Loader2, Database, Map, LogIn,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { isApiConfigured } from '../lib/api';
+import { useAuth } from '../hooks/useAuth';
+import { buildSignInUrl } from '../services/auth';
+import {
+  listStrategies, getStrategy, createStrategy, deleteStrategy,
+  StrategiesApiError, errorKeyForStatus,
+} from '../services/strategies';
 import { useTranslation } from '../i18n/useTranslation';
+
+// AUTH-003B - every call in this file goes through services/strategies.js
+// (the authenticated backend proxy), not supabase-js directly anymore -
+// public.strategies is RLS-protected and the browser never holds the
+// real Supabase access token needed to satisfy auth.uid(); the backend
+// relays these requests using the signed-in user's own cached token.
+function errorMessage(err, t) {
+  if (err instanceof StrategiesApiError) {
+    const key = errorKeyForStatus(err.status);
+    if (key) return t(key);
+  }
+  return err.message;
+}
 
 function formatDate(iso) {
   try {
@@ -30,10 +49,31 @@ function NotConfigured({ t }) {
       <div className="w-full bg-[#070818] border border-white/10 rounded-xl p-4 text-left">
         <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">.env</p>
         <pre className="text-[11px] text-green-400 leading-relaxed font-mono whitespace-pre-wrap">
-{`VITE_SUPABASE_URL=https://xxx.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key`}
+{`VITE_API_URL=https://your-backend.onrender.com`}
         </pre>
       </div>
+    </div>
+  );
+}
+
+// ── Signed Out Prompt ──────────────────────────────────────────────────────────
+function SignedOut({ t }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
+      <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4">
+        <LogIn size={28} className="text-indigo-400" />
+      </div>
+      <h3 className="text-[15px] font-bold text-white mb-2">{t('cloud_signed_out_title')}</h3>
+      <p className="text-[12px] text-slate-500 leading-relaxed mb-5 max-w-xs">
+        {t('cloud_signed_out_hint')}
+      </p>
+      <a
+        href={buildSignInUrl()}
+        className="flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-[13px] font-semibold transition-colors shadow-lg shadow-indigo-500/20"
+      >
+        <LogIn size={14} />
+        {t('cloud_sign_in_btn')}
+      </a>
     </div>
   );
 }
@@ -52,19 +92,11 @@ function SaveTab({ t }) {
     setError(null);
     setSaved(false);
     try {
-      const { error: err } = await supabase.from('strategies').insert({
-        name: name.trim(),
-        nodes,
-        edges,
-        product_info: productInfo,
-        ai_suggestions: aiSuggestions,
-        updated_at: new Date().toISOString(),
-      });
-      if (err) throw err;
+      await createStrategy({ name: name.trim(), nodes, edges, productInfo, aiSuggestions });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
-      setError(e.message);
+      setError(errorMessage(e, t));
     } finally {
       setSaving(false);
     }
@@ -124,14 +156,10 @@ function LoadTab({ t, onClose }) {
     setLoading(true);
     setError(null);
     try {
-      const { data, error: err } = await supabase
-        .from('strategies')
-        .select('id, name, product_info, nodes, updated_at')
-        .order('updated_at', { ascending: false });
-      if (err) throw err;
+      const data = await listStrategies();
       setStrategies(data || []);
     } catch (e) {
-      setError(e.message);
+      setError(errorMessage(e, t));
     } finally {
       setLoading(false);
     }
@@ -141,12 +169,7 @@ function LoadTab({ t, onClose }) {
 
   const handleLoad = async (id) => {
     try {
-      const { data, error: err } = await supabase
-        .from('strategies')
-        .select('*')
-        .eq('id', id)
-        .single();
-      if (err) throw err;
+      const data = await getStrategy(id);
       loadStrategy({
         nodes: data.nodes,
         edges: data.edges,
@@ -156,7 +179,7 @@ function LoadTab({ t, onClose }) {
       setLoadedId(id);
       setTimeout(() => { onClose(); }, 700);
     } catch (e) {
-      setError(e.message);
+      setError(errorMessage(e, t));
     }
   };
 
@@ -164,11 +187,10 @@ function LoadTab({ t, onClose }) {
     if (!window.confirm(t('cloud_delete_confirm'))) return;
     setDeletingId(id);
     try {
-      const { error: err } = await supabase.from('strategies').delete().eq('id', id);
-      if (err) throw err;
+      await deleteStrategy(id);
       setStrategies((prev) => prev.filter((s) => s.id !== id));
     } catch (e) {
-      setError(e.message);
+      setError(errorMessage(e, t));
     } finally {
       setDeletingId(null);
     }
@@ -287,6 +309,7 @@ export default function StrategiesModal() {
   const { setShowStrategies } = useStore();
   const t = useTranslation();
   const [tab, setTab] = useState('save');
+  const { isAuthenticated, isLoading } = useAuth();
 
   const onClose = () => setShowStrategies(false);
 
@@ -309,8 +332,14 @@ export default function StrategiesModal() {
           </button>
         </div>
 
-        {!isSupabaseConfigured ? (
+        {!isApiConfigured ? (
           <NotConfigured t={t} />
+        ) : isLoading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 size={24} className="animate-spin text-indigo-400" />
+          </div>
+        ) : !isAuthenticated ? (
+          <SignedOut t={t} />
         ) : (
           <>
             {/* Tabs */}
