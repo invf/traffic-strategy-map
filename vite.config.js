@@ -3,4 +3,13 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.js'],
+    globals: true,
+    // Scoped to the frontend only - backend/tests/*.test.mjs are plain
+    // Node scripts (run with `node`, not a test runner - see backend/
+    // package.json's own convention) and must never be picked up here.
+    include: ['src/**/*.test.{js,jsx}'],
+  },
 });
