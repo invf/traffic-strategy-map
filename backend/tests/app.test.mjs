@@ -136,6 +136,31 @@ async function run() {
     assert(res.status === 200, 'A failing usage log never changes the response the client already got - it is purely observability, never load-bearing');
   }
 
+  // ===== AUTH-003B same-origin proxy audit: /api and /auth responses are never cacheable =====
+  // A response proxied through Vercel's external-origin rewrite could
+  // be cached by its CDN if it carries caching headers (or, per
+  // Vercel's own ambiguity, possibly if it carries none at all) - for
+  // auth-bearing, per-user routes (a Set-Cookie response especially),
+  // a single cached response served to a different visitor would be a
+  // session-hijack-shaped bug. no-store must be explicit, not implied
+  // by the absence of any other header.
+  {
+    const app = createApp({
+      requireAuth: alwaysAuth('user-f'),
+      requireEntitlement: alwaysEntitled(),
+      openaiApiKey: 'fake-key',
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ choices: [] }) }),
+      recordUsage: async () => {},
+    });
+    const res = await request(app).post('/api/openai').send({ messages: [] });
+    assert(res.headers['cache-control'] === 'no-store', '/api/openai responses carry Cache-Control: no-store - never cacheable by an external-origin proxy CDN');
+  }
+  {
+    const app = createApp({ requireAuth: alwaysAuth(), requireEntitlement: alwaysEntitled() });
+    const res = await request(app).get('/health');
+    assert(res.headers['cache-control'] === undefined, '/health (not under /api or /auth) is unaffected - this is scoped, not a blanket no-store on every route');
+  }
+
   console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);
   if (failed > 0) process.exit(1);
 }

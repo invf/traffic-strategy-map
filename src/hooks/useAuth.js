@@ -5,7 +5,6 @@
 // server-authoritative (the cookie + GET /auth/sso/session), never
 // something to rehydrate from localStorage and trust on faith.
 import { useCallback, useEffect, useState } from 'react';
-import { isApiConfigured } from '../lib/api';
 import { fetchSsoSession, signOut as signOutRequest } from '../services/auth';
 
 export function useAuth() {
@@ -13,11 +12,11 @@ export function useAuth() {
   const [email, setEmail] = useState(null);
 
   const refresh = useCallback(async () => {
-    if (!isApiConfigured) {
-      setStatus('signed-out');
-      setEmail(null);
-      return;
-    }
+    // AUTH-003B same-origin proxy: there is no longer an "API not
+    // configured" build-time state to short-circuit on - VITE_API_URL
+    // unset means "use the same-origin proxy," a valid production
+    // configuration, not an error. fetchSsoSession() itself already
+    // degrades to {authenticated: false} on any real network failure.
     const session = await fetchSsoSession();
     if (session.authenticated) {
       setStatus('authenticated');

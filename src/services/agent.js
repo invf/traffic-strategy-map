@@ -1,4 +1,5 @@
-const API_URL = import.meta.env.VITE_API_URL;
+import { callOpenAiProxy } from '../lib/api.js';
+
 const LANG_NAMES = { en: 'English', uk: 'Ukrainian', ru: 'Russian' };
 
 function taskPrompt(nodeType, node, productInfo, langName, year = new Date().getFullYear()) {
@@ -120,33 +121,30 @@ Return ONLY valid JSON:
 }
 
 export async function runNodeAgent(node, productInfo, language = 'en') {
-  if (!API_URL) throw new Error('VITE_API_URL not set in .env');
-
   const langName = LANG_NAMES[language] || 'English';
   const nodeType = node.data?.nodeType || 'action';
   const currentYear = new Date().getFullYear();
 
-  const res = await fetch(`${API_URL}/api/openai`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      temperature: 0.8,
-      response_format: { type: 'json_object' },
-      max_tokens: 4000,
-      messages: [
-        {
-          role: 'system',
-          content: `You are an expert growth marketer. The current year is ${currentYear}. All advice, trends, platform features, algorithms, and statistics must reflect ${currentYear} reality — never reference ${currentYear - 1} or earlier years as "current". Return ONLY valid JSON. Write all text content in ${langName}.`,
-        },
-        {
-          role: 'user',
-          content: taskPrompt(nodeType, node, productInfo, langName, currentYear),
-        },
-      ],
-    }),
+  // AUTH-003B - /api/openai authenticates via this app's own
+  // first-party SSO cookie; callOpenAiProxy sends credentials and
+  // retries once on a 401 via a silent session refresh. This call was
+  // previously missing credentials entirely, which would have 401'd
+  // unconditionally once requireSsoAuth went live in production.
+  const res = await callOpenAiProxy({
+    model: 'gpt-4o-mini',
+    temperature: 0.8,
+    response_format: { type: 'json_object' },
+    max_tokens: 4000,
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert growth marketer. The current year is ${currentYear}. All advice, trends, platform features, algorithms, and statistics must reflect ${currentYear} reality — never reference ${currentYear - 1} or earlier years as "current". Return ONLY valid JSON. Write all text content in ${langName}.`,
+      },
+      {
+        role: 'user',
+        content: taskPrompt(nodeType, node, productInfo, langName, currentYear),
+      },
+    ],
   });
 
   if (!res.ok) {

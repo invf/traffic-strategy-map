@@ -11,7 +11,6 @@ import { User, LogOut, LogIn, Loader2 } from 'lucide-react';
 import { useTranslation } from '../i18n/useTranslation';
 import { useAuth } from '../hooks/useAuth';
 import { buildSignInUrl } from '../services/auth';
-import { isApiConfigured } from '../lib/api';
 
 export default function AccountButton() {
   const t = useTranslation();
@@ -20,8 +19,6 @@ export default function AccountButton() {
   const ref = useRef(null);
 
   useOutsideClick(ref, () => setOpen(false));
-
-  if (!isApiConfigured) return null;
 
   if (isLoading) {
     return (

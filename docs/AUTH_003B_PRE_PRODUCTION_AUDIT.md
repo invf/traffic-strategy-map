@@ -1,5 +1,7 @@
 # AUTH-003B — Pre-Production SSO Architecture Verification
 
+**RESOLVED**: this document's Task 2 recommendation (Option B, same-origin reverse proxy) was approved and implemented — see `docs/AUTH_003B_SAME_ORIGIN_PROXY_IMPLEMENTATION.md` for the actual implementation, the real RLS-isolation bug it caught, and the final release checklist. This document remains accurate as the record of the original findings (the cross-browser cookie research, the login-CSRF/CORS/caching bugs fixed here) and is superseded only on the architecture recommendation itself.
+
 Continuation of AUTH-003B on `invf/traffic-strategy-map` (`feature/auth-003a-security-and-sso-prep`) and `invf/adveser-platform` (`feature/auth-003b-traffic-map-sso-prep`). No production data, Supabase configuration, or entitlements were touched. Launch Studio, Earn Studio, and Slovakia Operations were not touched.
 
 ## Task 1 — Verified committed state

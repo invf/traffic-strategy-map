@@ -4,7 +4,7 @@
 // HttpOnly session cookie, which these calls rely on implicitly (via
 // apiFetch's credentials: 'include'). There is nothing to store here
 // beyond what GET /auth/sso/session itself reports.
-import { apiFetch, getApiUrl } from '../lib/api';
+import { apiFetch, resolveApiUrl } from '../lib/api';
 
 export async function fetchSsoSession() {
   try {
@@ -21,9 +21,12 @@ export async function fetchSsoSession() {
 
 // Not an apiFetch call - this is a full top-level navigation (the
 // browser must actually follow the OAuth redirect chain), not a fetch
-// the frontend can intercept and read the response of.
+// the frontend can intercept and read the response of. resolveApiUrl
+// (not a bare template string) is required because this needs a real
+// absolute URL even when running same-origin (VITE_API_URL unset) -
+// `new URL('/auth/sso/start')` with no base would throw.
 export function buildSignInUrl(returnTo) {
-  const url = new URL(`${getApiUrl()}/auth/sso/start`);
+  const url = new URL(resolveApiUrl('/auth/sso/start'));
   url.searchParams.set('return_to', returnTo || `${window.location.pathname}${window.location.search}`);
   return url.toString();
 }

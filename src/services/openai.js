@@ -1,6 +1,4 @@
-import { refreshSsoSession } from '../lib/api.js';
-
-const API_URL = import.meta.env.VITE_API_URL;
+import { callOpenAiProxy } from '../lib/api.js';
 
 const LANG_NAMES = { en: 'English', uk: 'Ukrainian', ru: 'Russian' };
 
@@ -188,41 +186,20 @@ function validateResponse(data) {
 }
 
 export async function generateStrategyWithAI(productInfo, language = 'en') {
-  if (!API_URL) throw new Error('VITE_API_URL не вказано у .env');
-
-  const requestInit = {
-    method: 'POST',
-    // AUTH-003B - /api/openai now authenticates via this app's own
-    // first-party SSO cookie (requireSsoAuth), not an anonymous call -
-    // credentials: 'include' is required for the browser to send it.
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      temperature: 0.75,
-      response_format: { type: 'json_object' },
-      max_tokens: 6000,
-      messages: [
-        { role: 'system', content: buildSystemPrompt(language) },
-        { role: 'user',   content: buildUserPrompt(productInfo) },
-      ],
-    }),
-  };
-
-  let res = await fetch(`${API_URL}/api/openai`, requestInit);
-  if (res.status === 401) {
-    // AUTH-003B pre-production audit: the session cookie can expire
-    // (15 min) while a tab sits open with no reload - GET /auth/sso/session
-    // silently refreshes it server-side if the underlying OAuth refresh
-    // token is still valid; retry exactly once rather than forcing a
-    // full re-login for what is otherwise still a valid signed-in user.
-    const session = await refreshSsoSession();
-    if (session.authenticated) {
-      res = await fetch(`${API_URL}/api/openai`, requestInit);
-    }
-  }
+  // AUTH-003B - /api/openai authenticates via this app's own
+  // first-party SSO cookie (requireSsoAuth); callOpenAiProxy sends
+  // credentials and retries once on a 401 via a silent session
+  // refresh (lib/api.js's own comment has the full reasoning).
+  const res = await callOpenAiProxy({
+    model: 'gpt-4o-mini',
+    temperature: 0.75,
+    response_format: { type: 'json_object' },
+    max_tokens: 6000,
+    messages: [
+      { role: 'system', content: buildSystemPrompt(language) },
+      { role: 'user',   content: buildUserPrompt(productInfo) },
+    ],
+  });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

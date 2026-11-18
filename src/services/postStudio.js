@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL;
+import { callOpenAiProxy } from '../lib/api.js';
 
 function buildSystemPrompt(productInfo, language) {
   const langInstruction = language === 'en'
@@ -90,23 +90,20 @@ Return JSON only (same order as input, array of objects):
 }
 
 async function callOpenAI(systemPrompt, userPrompt) {
-  if (!API_URL) throw new Error('VITE_API_URL not set in .env');
-
-  const res = await fetch(`${API_URL}/api/openai`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      temperature: 0.9,
-      response_format: { type: 'json_object' },
-      max_tokens: 3000,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userPrompt },
-      ],
-    }),
+  // AUTH-003B - /api/openai authenticates via this app's own
+  // first-party SSO cookie; callOpenAiProxy sends credentials and
+  // retries once on a 401 via a silent session refresh. This call was
+  // previously missing credentials entirely, which would have 401'd
+  // unconditionally once requireSsoAuth went live in production.
+  const res = await callOpenAiProxy({
+    model: 'gpt-4o-mini',
+    temperature: 0.9,
+    response_format: { type: 'json_object' },
+    max_tokens: 3000,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userPrompt },
+    ],
   });
 
   if (!res.ok) {

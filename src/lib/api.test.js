@@ -53,4 +53,45 @@ describe('apiFetch', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(401);
   });
+
+  it('callOpenAiProxy sends credentials and retries once on 401, same as apiFetch', async () => {
+    const { callOpenAiProxy } = await import('./api.js');
+    global.fetch
+      .mockResolvedValueOnce({ status: 401, ok: false })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ authenticated: true }) })
+      .mockResolvedValueOnce({ status: 200, ok: true });
+
+    const res = await callOpenAiProxy({ model: 'gpt-4o-mini' });
+
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+    expect(global.fetch.mock.calls[0][1].credentials).toBe('include');
+    expect(res.status).toBe(200);
+  });
+});
+
+// AUTH-003B same-origin proxy: VITE_API_URL unset must resolve to a
+// relative, same-origin path, not throw or silently stay undefined -
+// this is what lets the browser never contact a different origin at
+// all once vercel.json's rewrites are in front of it. A separate
+// describe block (own module import under a stubbed env) since the
+// top-level test env always sets VITE_API_URL for the suite above.
+describe('resolveApiUrl / apiFetch with VITE_API_URL unset (same-origin default)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+    vi.stubEnv('VITE_API_URL', '');
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  it('resolveApiUrl falls back to window.location.origin when VITE_API_URL is unset', async () => {
+    const { resolveApiUrl } = await import('./api.js');
+    expect(resolveApiUrl('/auth/sso/start')).toBe(`${window.location.origin}/auth/sso/start`);
+  });
+
+  it('apiFetch calls fetch with a bare relative path (resolved by the browser against the current origin), not an absolute cross-origin URL', async () => {
+    const { apiFetch } = await import('./api.js');
+    global.fetch.mockResolvedValueOnce({ status: 200, ok: true });
+    await apiFetch('/api/strategies');
+    expect(global.fetch.mock.calls[0][0]).toBe('/api/strategies');
+  });
 });

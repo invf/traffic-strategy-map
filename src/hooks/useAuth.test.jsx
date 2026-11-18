@@ -1,12 +1,11 @@
 // AUTH-003B - the shared session-state hook every signed-in/signed-out
 // UI decision (AccountButton, StrategiesModal's gate) is built on.
-// Mocks services/auth.js and lib/api.js directly - no real fetch, no
-// real backend - so these assertions are about the hook's own state
-// machine, not the network layer.
+// Mocks services/auth.js directly - no real fetch, no real backend -
+// so these assertions are about the hook's own state machine, not the
+// network layer.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 
-vi.mock('../lib/api', () => ({ isApiConfigured: true }));
 vi.mock('../services/auth', () => ({
   fetchSsoSession: vi.fn(),
   signOut: vi.fn(),

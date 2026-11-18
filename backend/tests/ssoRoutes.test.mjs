@@ -125,7 +125,7 @@ async function run() {
     const setCookie = callbackRes.headers['set-cookie'] ?? [];
     assert(setCookie.some((c) => c.startsWith(`${SSO_COOKIE_NAME}=`)), 'callback happy path: sets the SSO session cookie');
     assert(setCookie.some((c) => c.includes('HttpOnly')), 'callback happy path: the cookie is HttpOnly');
-    assert(setCookie.some((c) => c.includes('SameSite=None') && c.includes('Secure')), 'callback happy path: the cookie is SameSite=None; Secure - required for this cross-origin (Vercel/Render) architecture, unlike Launch Studio\'s own SameSite=Lax monolith cookie');
+    assert(setCookie.some((c) => c.includes('SameSite=Lax') && c.includes('Secure')), 'callback happy path: the cookie is SameSite=Lax; Secure by default - correct now that frontend and backend are same-site via the Vercel reverse proxy (Option B)');
     assert(!setCookie.some((c) => c.includes('fake-access-token') || c.includes('fake-refresh-token')), 'callback happy path: the RAW OAuth access/refresh tokens never appear in the cookie value');
     assert(setCookie.some((c) => c.startsWith(`${OAUTH_CSRF_COOKIE_NAME}=;`) || (c.startsWith(`${OAUTH_CSRF_COOKIE_NAME}=`) && c.includes('Max-Age=0'))), 'callback happy path: the OAuth login-CSRF cookie is cleared once consumed, never left sitting around');
   }

@@ -14,29 +14,27 @@
 // never leave this server; the browser holds only an opaque, HttpOnly,
 // first-party cookie signed with a secret only this server knows.
 //
-// ONE REAL ADAPTATION from Launch Studio's version, not a copy-paste:
-// Launch Studio is a monolith (one origin serves both frontend and
-// API), so its cookie uses SameSite=Lax. Traffic Strategy Map's
-// frontend (Vercel) and backend (Render) are genuinely different
-// origins - SameSite=Lax would NOT be sent on the frontend's own
-// cross-origin fetch() calls to this backend. This cookie uses
-// SameSite=None (which browsers require to be paired with Secure) -
-// correct for this split-origin architecture, not a stylistic choice.
+// ARCHITECTURE: AUTH-003B's pre-production audit found that
+// SameSite=None (needed while frontend and backend were on genuinely
+// different origins - Vercel vs. Render) does NOT make this cookie
+// reliable everywhere: Safari blocks ALL third-party cookies
+// unconditionally (no SameSite=None exception exists), and Firefox's
+// default Total Cookie Protection partitions storage per top-level
+// site, so a cookie set while the backend is briefly the top-level
+// site (during the OAuth redirect) is invisible to a later cross-site
+// fetch from the frontend. Only default Chrome worked reliably under
+// that shape. See docs/AUTH_003B_PRE_PRODUCTION_AUDIT.md.
 //
-// Pre-production audit finding (see docs/AUTH_003B_PRE_PRODUCTION_AUDIT.md):
-// SameSite=None does NOT make this cookie reliable everywhere - Safari
-// blocks ALL third-party cookies unconditionally (no SameSite=None
-// exception exists), and Firefox's default Total Cookie Protection
-// partitions storage per top-level site, so a cookie set while
-// backend.onrender.com is briefly the top-level site (during the OAuth
-// redirect) is invisible to a later cross-site fetch from
-// frontend.vercel.app. Only default Chrome currently works reliably.
-// The durable fix is an ADVESER-controlled same-origin reverse proxy
-// (frontend and backend under one registrable domain) - once that is
-// live, this cookie should become SameSite=Lax, which is why the value
-// is configurable (TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE) rather than
-// hardcoded: flipping the deployment architecture should be an env var
-// change here, not a code change.
+// DECIDED FIX (Option B, approved): traffic-map.adveser.com reverse-
+// proxies /api/* and /auth/* to the Render backend (vercel.json) -
+// frontend and backend are now the SAME site from every browser's
+// perspective, same as Launch Studio's monolith. SameSite=Lax is the
+// default accordingly (real CSRF protection, not just "the minimum
+// needed to survive being cross-origin"). TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE=None
+// remains available as an explicit rollback switch for an emergency
+// revert to the old split-origin shape (e.g. the proxy is temporarily
+// unavailable) - kept configurable, not re-hardcoded, for exactly that
+// reason.
 //
 // In-memory session-record store: same documented trade-off as
 // Launch Studio - a process restart drops in-flight SSO sessions;
@@ -128,19 +126,17 @@ export function readSessionCookie(cookieHeader) {
   return readCookie(cookieHeader, SSO_COOKIE_NAME);
 }
 
-// Defaults to None (today's split-origin reality). Set
-// TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE=Lax once frontend and backend
-// are served from the same registrable domain via a reverse proxy
-// (see docs/AUTH_003B_PRE_PRODUCTION_AUDIT.md's recommended
-// architecture) - Lax is sufficient and strictly safer (real CSRF
-// protection, not just a "None is required for cross-origin" default)
-// once there is no cross-origin fetch left for it to break. An invalid
-// value fails closed to 'None' rather than silently producing a
-// malformed Set-Cookie header.
+// Defaults to Lax - correct now that frontend and backend are same-
+// site via the Vercel reverse proxy (see this file's own header
+// comment). Set TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE=None only as an
+// explicit, temporary rollback to the old split-origin shape. An
+// invalid value fails closed to 'Lax' (the current correct default),
+// never to the weaker 'None', and never produces a malformed
+// Set-Cookie header.
 function getCookieSameSite() {
   const value = process.env.TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE;
-  if (value === 'Lax' || value === 'Strict') return value;
-  return 'None';
+  if (value === 'None' || value === 'Strict') return value;
+  return 'Lax';
 }
 
 // Secure unconditionally - required by every browser whenever

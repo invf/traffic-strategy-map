@@ -1,5 +1,7 @@
 # AUTH-003A/B — Final Coordinated Deployment Checklist & GO/NO-GO
 
+**Superseded on environment/URL specifics**: the architecture decision landed on Option B (same-origin Vercel reverse proxy, `traffic-map.adveser.com`) after this document was written — its migration sequencing and rollback guidance remain accurate, but `docs/AUTH_003B_SAME_ORIGIN_PROXY_IMPLEMENTATION.md` has the authoritative, current env var values and deployment steps (step 3 below's `FRONTEND_URL`/OAuth redirect URI values specifically are from the OLD split-origin design and should not be used).
+
 Consolidates every AUTH-003A/B commit on `feature/auth-003a-security-and-sso-prep` through this session's final commit. Nothing below has been run against production — read-only verification only (confirmed the 3 original strategies are present and unchanged, most recently immediately before writing this document). AUTH-003B's own instruction was explicit: implement the complete integration, not another proposal, and stop only at the actual manual OAuth configuration or production approval checkpoint — that is where this document stops.
 
 ## Deployment checklist, in order

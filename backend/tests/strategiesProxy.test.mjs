@@ -93,27 +93,30 @@ async function run() {
     assert(captured.init.headers.apikey === 'anon-key-value', 'Sends the project anon key as the apikey header (required by PostgREST), never a service key');
   }
 
-  // ===== GET /api/strategies/:id - single-object query =====
+  // ===== GET /api/strategies/:id - single-row query, array-based (not the singular-object Accept header) =====
   {
     let captured;
+    let capturedHeaders;
     const app = buildApp({
       ensureValidAccessToken: async () => 'tok',
       fetchImpl: async (url, init) => {
         captured = new URL(url);
-        return jsonResponse(200, { id: 'abc', name: 'Full', nodes: [], edges: [], product_info: {}, ai_suggestions: {} });
+        capturedHeaders = init.headers;
+        return jsonResponse(200, [{ id: 'abc', name: 'Full', nodes: [], edges: [], product_info: {}, ai_suggestions: {} }]);
       },
     });
     const res = await request(app).get('/api/strategies/abc');
-    assert(res.status === 200 && res.body.id === 'abc', 'GET /api/strategies/:id returns the full row');
+    assert(res.status === 200 && res.body.id === 'abc', 'GET /api/strategies/:id returns the full row (unwrapped from the array PostgREST returns)');
     assert(captured.searchParams.get('id') === 'eq.abc', 'Filters by the exact requested id');
     assert(captured.searchParams.get('select') === '*', 'Requests all columns for the single-row view');
+    assert(!capturedHeaders?.Accept, "Pre-production audit fix: no singular-object Accept header - a REAL PostgREST returns a 406 error (not 200+null) for that header when 0 rows match, which this app's rehearsal_strategies_proxy.mjs caught against a real local stack");
   }
 
-  // ===== GET /api/strategies/:id - not found =====
+  // ===== GET /api/strategies/:id - not found (0 rows in the array, not a null/missing body) =====
   {
     const app = buildApp({
       ensureValidAccessToken: async () => 'tok',
-      fetchImpl: async () => jsonResponse(200, undefined),
+      fetchImpl: async () => jsonResponse(200, []),
     });
     const res = await request(app).get('/api/strategies/missing');
     assert(res.status === 404, 'GET /api/strategies/:id for a nonexistent (or not-owned/not-demo, RLS-invisible) row -> 404, not a crash');

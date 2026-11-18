@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
-vi.mock('../lib/api', () => ({ isApiConfigured: true, getApiUrl: () => 'http://localhost:3001' }));
+vi.mock('../lib/api', () => ({ resolveApiUrl: (path) => `http://localhost:3001${path}` }));
 vi.mock('../i18n/useTranslation', () => ({
   useTranslation: () => (key) => ({
     account_sign_in: 'Sign in',

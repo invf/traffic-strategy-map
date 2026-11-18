@@ -120,16 +120,26 @@ export function createStrategiesRouter(deps = {}) {
 
   router.get('/api/strategies/:id', async (req, res) => {
     await withAccessToken(req, res, resolved, async (accessToken) => {
+      // AUTH-003B pre-production audit correction: the singular-object
+      // Accept header (application/vnd.pgrst.object+json) was tried
+      // here originally, on the assumption that zero matching rows
+      // would come back as a 200 with a null body - a REAL local
+      // Supabase/PostgREST stack proved that wrong (backend/
+      // rehearsal_strategies_proxy.mjs): PostgREST instead returns a
+      // 406 error (PGRST116, "0 rows") for that header, which was
+      // being thrown as a generic 406 rather than ever reaching the
+      // intended 404 branch below. Requesting a plain array and
+      // checking its length is the SAME convention already proven
+      // correct for PATCH/DELETE below - one fewer special case.
       const data = await postgrestRequest(resolved, accessToken, {
         method: 'GET',
         path: 'strategies',
         query: { select: '*', id: `eq.${req.params.id}` },
-        extraHeaders: { Accept: 'application/vnd.pgrst.object+json' },
       });
-      if (!data) {
+      if (!Array.isArray(data) || data.length === 0) {
         return res.status(404).json({ error: { message: 'Strategy not found.' } });
       }
-      res.json(data);
+      res.json(data[0]);
     });
   });
 

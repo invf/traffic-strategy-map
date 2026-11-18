@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import {
   X, Cloud, Save, FolderOpen, Trash2, RefreshCw,
-  Check, AlertCircle, Loader2, Database, Map, LogIn,
+  Check, AlertCircle, Loader2, Map, LogIn,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
-import { isApiConfigured } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
 import { buildSignInUrl } from '../services/auth';
 import {
@@ -33,27 +32,6 @@ function formatDate(iso) {
       hour: '2-digit', minute: '2-digit',
     });
   } catch { return iso; }
-}
-
-// ── Not Configured Banner ─────────────────────────────────────────────────────
-function NotConfigured({ t }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
-      <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mx-auto mb-4">
-        <Database size={28} className="text-amber-400" />
-      </div>
-      <h3 className="text-[15px] font-bold text-white mb-2">{t('cloud_not_configured')}</h3>
-      <p className="text-[12px] text-slate-500 leading-relaxed mb-5 max-w-xs">
-        {t('cloud_not_configured_hint')}
-      </p>
-      <div className="w-full bg-[#070818] border border-white/10 rounded-xl p-4 text-left">
-        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">.env</p>
-        <pre className="text-[11px] text-green-400 leading-relaxed font-mono whitespace-pre-wrap">
-{`VITE_API_URL=https://your-backend.onrender.com`}
-        </pre>
-      </div>
-    </div>
-  );
 }
 
 // ── Signed Out Prompt ──────────────────────────────────────────────────────────
@@ -332,9 +310,7 @@ export default function StrategiesModal() {
           </button>
         </div>
 
-        {!isApiConfigured ? (
-          <NotConfigured t={t} />
-        ) : isLoading ? (
+        {isLoading ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 size={24} className="animate-spin text-indigo-400" />
           </div>

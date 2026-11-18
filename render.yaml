@@ -16,11 +16,12 @@ services:
       # not the place to hardcode any environment's actual value.
       - key: SUPABASE_URL
         sync: false
-      # AUTH-003B - the project's public anon key (same one already in
-      # the frontend bundle as VITE_SUPABASE_ANON_KEY - not a secret).
-      # Required as PostgREST's `apikey` header by the strategies proxy
-      # (backend/routes/strategiesProxy.js); the real per-user identity
-      # comes from the Authorization: Bearer header, not this key.
+      # AUTH-003B - the project's public anon key (not a secret by
+      # itself - the frontend no longer ships its own Supabase client/
+      # key at all, this backend's strategiesProxy.js is the only place
+      # that needs it). Required as PostgREST's `apikey` header; the
+      # real per-user identity comes from the Authorization: Bearer
+      # header, not this key.
       - key: SUPABASE_ANON_KEY
         sync: false
       - key: TRAFFIC_STRATEGY_MAP_DB_URL
@@ -33,8 +34,10 @@ services:
         sync: false
       - key: TRAFFIC_STRATEGY_MAP_SESSION_SECRET
         sync: false
-      # AUTH-003B pre-production audit - optional; omit entirely until
-      # the same-origin reverse-proxy architecture is live (see
-      # docs/AUTH_003B_PRE_PRODUCTION_AUDIT.md). Defaults to None.
+      # AUTH-003B same-origin proxy (Option B, approved) - optional;
+      # omit entirely in normal operation (defaults to Lax, correct for
+      # the Vercel-proxied architecture). Set to None only as an
+      # explicit, temporary rollback - see
+      # docs/AUTH_003B_PRE_PRODUCTION_AUDIT.md.
       - key: TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE
         sync: false

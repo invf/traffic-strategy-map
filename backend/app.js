@@ -39,6 +39,25 @@ export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetch
   }));
   app.use(express.json({ limit: '256kb' }));
 
+  // AUTH-003B same-origin proxy (Option B) audit finding: Vercel's
+  // external-origin rewrite CDN can cache a proxied response that
+  // carries upstream caching headers - and every one of these routes
+  // is per-user and auth-bearing (session cookies, strategy data,
+  // OpenAI usage). Absence of a Cache-Control header is the likely-safe
+  // default per Vercel's own docs, but "likely" is not good enough for
+  // a response that sets a per-user Set-Cookie - a single cached
+  // /auth/sso/callback response would hand EVERY later visitor the
+  // FIRST visitor's session cookie. no-store is explicit and
+  // unambiguous, and costs nothing (these responses were never
+  // cacheable in any useful sense anyway). vercel.json's own
+  // x-vercel-enable-rewrite-caching: 0 for these same paths is the
+  // second, independent layer - this one is correct regardless of
+  // which proxy or CDN ever sits in front of this backend.
+  app.use(['/auth', '/api'], (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
   // Mounted OUTSIDE the /api/openai auth gate below - these ARE the
