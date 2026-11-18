@@ -1,6 +1,16 @@
-# AUTH-003A-3 — OAuth Client Registration & Test Account Setup
+# AUTH-003A — OAuth Client Registration & Test Account Setup
 
-Two things block running the OAuth/RLS compatibility test for real. Neither can be done by Claude — both require direct Supabase dashboard access and a decision only you can make (which real or disposable account to authorize for testing).
+**Reconfirmed this session** (re-read the test scripts directly — both still exist, unchanged, and still require exactly these inputs): two things block running the OAuth/RLS compatibility test for real. Neither can be done by Claude — both require direct Supabase dashboard access and a decision only you can make (which real or disposable account to authorize for testing).
+
+## Minimum manual Supabase configuration required
+
+Just these three dashboard/account actions — nothing else:
+
+1. **One OAuth client registration** (Authentication → OAuth Apps → Create OAuth Client) — name, redirect URI, Authorization Code + PKCE grant type, `openid email` scope. Yields a client ID and secret.
+2. **One SQL statement** applied via the SQL Editor: `supabase/migrations/20261118130000_add_oauth_rls_probe_table.sql` (creates one small, disposable, RLS-protected table — never touches `public.strategies`).
+3. **One disposable test account** with a password set (via AUTH-002A's existing password flow — no new mechanism needed).
+
+Everything else — PKCE generation, the authorize URL, the token exchange, `setSession()`, the RLS probe, refresh rotation, sign-out — is already-written, already-reviewed code (`supabase/oauth_test/`), not something that needs further Supabase configuration.
 
 ## Why the test is now two steps, not one
 

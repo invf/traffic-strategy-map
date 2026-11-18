@@ -19,25 +19,47 @@ COMMIT;
 
 **Verified empirically** (not just reasoned about) against a local rehearsal stack this session: executed this exact sequence after running the migration and creating test data, and confirmed the table returns to its exact original 8-column, fully-open shape with zero row loss. See `supabase/rehearsal.mjs`.
 
-## Post-cutover rollback (real owned strategies exist)
+## Post-cutover rollback (real owned strategies exist) — CORRECTED
 
-**Do not drop the columns.** The correct emergency response — e.g. a bug in the new auth/RLS path is blocking real users — is to disable enforcement while preserving every bit of ownership metadata, so re-enabling later needs no reconstruction:
+**Earlier versions of this document recommended `ALTER TABLE public.strategies DISABLE ROW LEVEL SECURITY;` as the post-cutover emergency response. This was wrong and has been removed.** Disabling RLS while private user data exists makes every user's private strategy readable and writable by anyone, including anonymously — a far worse outcome than almost any bug this would be rolling back from. **Never recommend or use this once real private rows exist.**
+
+Instead, two corrected procedures, both **executed and verified against a disposable local Supabase stack** (`supabase/rehearsal_rollback.mjs`, 11/11 assertions passed) — never against production:
+
+### A. Suspend the feature (the default emergency response)
+
+If something is broken and real users are affected, freeze **writes only**, at the grant level — RLS, and therefore all isolation, is never touched:
 
 ```sql
--- Emergency: restores fully-open access immediately, loses nothing.
-ALTER TABLE public.strategies DISABLE ROW LEVEL SECURITY;
+REVOKE INSERT, UPDATE, DELETE ON public.strategies FROM authenticated;
 ```
 
-This alone undoes the *behavioral* effect of the migration (everyone can read/write everything again, exactly like before AUTH-003A) while every row keeps its real `user_id`/`is_demo` value, ready for RLS to be re-enabled the moment the underlying bug is fixed:
+**Proven empirically**: after this, even the legitimate owner of a row cannot create or modify strategies (the feature is genuinely offline) — but reads continue working exactly as before, with full isolation intact (a second user still cannot read the first user's private row; anonymous access is not widened at all). Lift it the moment the underlying issue is fixed:
 
 ```sql
-ALTER TABLE public.strategies ENABLE ROW LEVEL SECURITY;
+GRANT INSERT, UPDATE, DELETE ON public.strategies TO authenticated;
 ```
 
-**Only if the ownership feature is being permanently abandoned** (not paused) would dropping the columns ever be appropriate post-cutover — and even then:
-1. Take a full backup first, specifically including `user_id`/`is_demo` (a plain `select=*` already captures them — `scripts/backup-strategies.mjs` needs no changes for this).
-2. Store that backup durably (see the handoff section below) — it's the only way ownership could ever be reconstructed later if the feature is revisited.
-3. Only then drop the columns.
+Verified: ownership `WITH CHECK` enforcement is immediately active again on lift — because RLS was never disabled, there is nothing to "restore."
+
+### B. A specific RLS policy is the bug — fix that one policy, never disable RLS to do it
+
+If the actual defect is in a policy's own logic (e.g., a `USING` clause that's accidentally too permissive), replace **only that policy**:
+
+```sql
+DROP POLICY "read own or approved demo" ON public.strategies;
+CREATE POLICY "read own or approved demo" ON public.strategies
+  FOR SELECT USING (is_demo = true OR (user_id IS NOT NULL AND user_id = auth.uid()));
+```
+
+**Proven empirically**: the rehearsal deliberately introduced a broken policy (`USING (true)` — reads everything), confirmed the resulting real exposure (one test user could read another's private row), then fixed it by dropping and recreating *only* that policy — isolation was restored immediately, and RLS itself was enabled the entire time, including during the deliberately-broken window (the exposure came from the policy's own logic, never from RLS being off).
+
+### If a secure rollback genuinely isn't possible
+
+Suspend the feature (procedure A) and leave it suspended while a proper fix is prepared, rather than reach for anything that disables RLS. A write freeze with full read isolation intact is always available as a safe holding state — there is no scenario where disabling RLS is the only option.
+
+### Only if the ownership feature is being permanently abandoned (not paused, not a bug response)
+
+Even then, do not disable RLS to get there — change the policies to something durably safe instead (e.g., a service-role-only `USING (false)` policy for `authenticated`/`anon`, making every row admin-only rather than world-readable), and only consider dropping the `user_id`/`is_demo` columns after taking a full backup that specifically includes them (`scripts/backup-strategies.mjs`'s plain `select=*` already captures both).
 
 ## Data preservation — verified complete
 

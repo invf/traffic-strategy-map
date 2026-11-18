@@ -88,6 +88,44 @@ async function run() {
       assert(resultsB.filter((r) => r.allowed).length === 5, "User B's own limit is entirely unaffected by User A's simultaneous race");
     }
 
+    // ===== AUTH-003A Final Security Corrections: durable across a SIMULATED backend restart =====
+    // "Restart" here means exactly what it would for the real Render
+    // service: the Node process's own in-memory state - including its
+    // pg.Pool object - is gone, and a brand new process starts with a
+    // brand new Pool, knowing nothing about what came before except
+    // what's in Postgres. Proven by literally closing one pool and
+    // connecting a second, independent one to the SAME database -
+    // nothing in this test carries the count across in JS memory.
+    {
+      const userId = crypto.randomUUID();
+      const limit = 5;
+
+      // "Process 1" uses some of the quota, then "crashes"/redeploys.
+      const poolBeforeRestart = new pg.Pool({ connectionString: DB_URL, max: 5 });
+      const before = [];
+      before.push(await checkAndIncrementQuotaAtomic(poolBeforeRestart, userId, limit));
+      before.push(await checkAndIncrementQuotaAtomic(poolBeforeRestart, userId, limit));
+      before.push(await checkAndIncrementQuotaAtomic(poolBeforeRestart, userId, limit));
+      assert(before.every((r) => r.allowed), 'Before the simulated restart, 3 requests are allowed (under the limit of 5)');
+      await poolBeforeRestart.end(); // the "process" is gone - this Pool object no longer exists anywhere
+
+      // "Process 2" - a BRAND NEW pool, a brand new connection, no
+      // shared JS object or module state with the one above (this is
+      // why the in-memory Map limiter COULD NOT pass this test - it
+      // would reset to zero here; this one must not).
+      const poolAfterRestart = new pg.Pool({ connectionString: DB_URL, max: 5 });
+      try {
+        const after1 = await checkAndIncrementQuotaAtomic(poolAfterRestart, userId, limit);
+        assert(after1.allowed === true && after1.remaining === 1, `After the "restart," the NEW pool still sees the count from before it (got remaining=${after1.remaining}, expected 1 of 5 left after this, the 4th overall request) - the limit survived the process boundary, proven by actually crossing it, not argued from the schema`);
+        const after2 = await checkAndIncrementQuotaAtomic(poolAfterRestart, userId, limit);
+        assert(after2.allowed === true && after2.remaining === 0, 'The 5th request overall exactly fills the limit of 5 - still allowed, with zero remaining');
+        const after3 = await checkAndIncrementQuotaAtomic(poolAfterRestart, userId, limit);
+        assert(after3.allowed === false, 'The 6th request overall - the first to actually exceed the limit of 5 - is rejected. The restart did not grant a fresh allowance at any point: 5 real requests were allowed total, spanning both "processes," never more.');
+      } finally {
+        await poolAfterRestart.end();
+      }
+    }
+
     // ===== Subsequent day is a fresh bucket (PRIMARY KEY (user_id, day)) =====
     {
       const userId = crypto.randomUUID();

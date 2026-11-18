@@ -4,12 +4,16 @@ import { createRequireAuth } from './middleware/requireAuth.js';
 import { createRequireEntitlement } from './middleware/requireEntitlement.js';
 import { requireDisabled } from './middleware/requireDisabled.js';
 import { checkEntitlement, checkQuota, recordUsage } from './lib/entitlements.js';
+import { validateDailyQuota } from './lib/validateDailyQuota.js';
 dotenv.config();
 
 // AUTH-003A Final Security Corrections: configurable daily cap, durable
 // (Postgres-backed) quota - see backend/lib/quota.js and
-// docs/AUTH_003A_QUOTA_DESIGN.md.
-const dailyLimit = process.env.OPENAI_DAILY_QUOTA ? Number(process.env.OPENAI_DAILY_QUOTA) : undefined;
+// docs/AUTH_003A_QUOTA_DESIGN.md. Validated strictly - throws (crashing
+// startup, loudly) rather than silently coercing a typo'd or malicious
+// value into something that controls real spending. See
+// lib/validateDailyQuota.js's own comment for exactly what's rejected.
+const dailyLimit = validateDailyQuota(process.env.OPENAI_DAILY_QUOTA);
 
 // AUTH-003A Final Security Corrections: exactly two states, chosen
 // explicitly - never a silent partial fallback.
