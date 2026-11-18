@@ -6,11 +6,11 @@
 
 Just these three dashboard/account actions — nothing else:
 
-1. **One OAuth client registration** (Authentication → OAuth Apps → Create OAuth Client) — name, redirect URI, Authorization Code + PKCE grant type, `openid email` scope. Yields a client ID and secret.
+1. **One OAuth client registration** (Authentication → OAuth Apps → Create OAuth Client) — name, redirect URI (**the BACKEND's own callback — see below, not the frontend**), Authorization Code + PKCE grant type, `openid email` scope. Yields a client ID and secret.
 2. **One SQL statement** applied via the SQL Editor: `supabase/migrations/20261118130000_add_oauth_rls_probe_table.sql` (creates one small, disposable, RLS-protected table — never touches `public.strategies`).
 3. **One disposable test account** with a password set (via AUTH-002A's existing password flow — no new mechanism needed).
 
-Everything else — PKCE generation, the authorize URL, the token exchange, `setSession()`, the RLS probe, refresh rotation, sign-out — is already-written, already-reviewed code (`supabase/oauth_test/`), not something that needs further Supabase configuration.
+Everything else — PKCE generation, the authorize URL, the token exchange, `setSession()`, the RLS probe, refresh rotation, sign-out — is already-written, already-reviewed code (`supabase/oauth_test/`), not something that needs further Supabase configuration. **Separately, AUTH-003B's real backend integration (`backend/routes/ssoRoutes.js`) is already built and does not wait on this test's result** — see "AUTH-003B production config" below for what that integration specifically needs.
 
 ## Why the test is now two steps, not one
 
@@ -21,14 +21,27 @@ The first version of this test tried to fake an ADVESER Platform session by pass
 Supabase Dashboard → the shared project (`eukogyljakqafnuvrfiv`) → **Authentication → OAuth Apps** (or **OAuth Server**, naming varies by dashboard version) → **Create OAuth Client**:
 
 1. **Name**: `Traffic Strategy Map`.
-2. **Redirect URI**: `https://traffic-strategy-map-drab.vercel.app/auth/callback` — or whatever this app's real callback route ends up being once AUTH-003A-4 builds it (fine to register now even if unreachable yet).
+2. **Redirect URI**: `https://traffic-strategy-backend.onrender.com/auth/sso/callback` — the **backend's** own route (`backend/routes/ssoRoutes.js`), not the frontend. This is deliberate, not a placeholder: the client secret is exchanged for tokens server-side only, so it never needs to reach the browser at all. Use this app's real Render domain if it differs from the one in `backend/.env.example`.
 3. **Grant types**: Authorization Code with PKCE.
 4. **Scopes**: `openid email`.
-5. Save, copy the **Client ID** and **Client Secret** (shown once) — store the secret as an env var, never committed, never pasted into chat.
+5. Save, copy the **Client ID** and **Client Secret** (shown once) — store both as env vars, never committed, never pasted into chat.
 
 ```
 TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_ID=<the client id>
+TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_SECRET=<the client secret>
+TRAFFIC_STRATEGY_MAP_OAUTH_REDIRECT_URI=https://traffic-strategy-backend.onrender.com/auth/sso/callback
 ```
+
+### AUTH-003B production config (separate from the standalone test above)
+
+The real backend integration needs the three vars just above, **plus**:
+
+```
+TRAFFIC_STRATEGY_MAP_SESSION_SECRET=<a long, random value, generated once - e.g. `openssl rand -hex 32`>
+SUPABASE_ANON_KEY=<the project's public anon key - same one already in the frontend bundle, not a secret itself>
+```
+
+All five (plus the already-required `SUPABASE_URL` and `FRONTEND_URL`) must be set on the backend (Render) for `/api/openai` and `/api/strategies` to leave their disabled/not-mounted states — see `backend/server.js`'s own startup logging, which says explicitly which of the two states it's in and why.
 
 ## 2. Apply the isolated probe table
 
@@ -55,7 +68,7 @@ This prints a URL and saves the PKCE verifier/state locally (gitignored).
 1. Open the printed URL in a real browser.
 2. Sign in as the disposable test account if not already.
 3. Approve the consent screen.
-4. The browser will try to navigate to the redirect URI and likely show an error page — expected, since no real callback route exists yet. Copy the **full** resulting URL from the address bar.
+4. The browser will navigate to the redirect URI. If the backend is deployed and fully configured, its real `/auth/sso/callback` route will handle this itself (this standalone script's own purpose becomes redundant once that's true - it exists for verifying the raw protocol independent of this app's own session logic). If not yet deployed/configured, it will show a connection error instead - either way, copy the **full** resulting URL from the address bar before anything else happens to it.
 
 **Step 3** (back to the terminal):
 ```bash
