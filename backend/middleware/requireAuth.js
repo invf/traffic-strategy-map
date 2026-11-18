@@ -12,23 +12,38 @@
 // middleware does NOT itself prove is end-to-end RLS compatibility -
 // see docs/AUTH_003A_OAUTH_RLS_TEST.md for that separate question.
 //
-// expectedClientId, when given, additionally requires the token's own
-// client_id claim to match it. Without this, ANY valid token issued by
-// this shared project - including one issued to a completely different
+// expectedClientId additionally requires the token's own client_id
+// claim to match it. Without this, ANY valid token issued by this
+// shared project - including one issued to a completely different
 // OAuth client, e.g. Launch Studio's - would be accepted here too,
 // since every client's tokens share the same issuer, audience and
 // signing key. A regular (non-OAuth) session token has no client_id
 // claim at all, so expectedClientId also has the effect of rejecting
-// those if set - a deliberate choice for an endpoint meant to be
-// reached only via this app's own OAuth client, not via any direct
-// browser session.
+// those - a deliberate choice for an endpoint meant to be reached only
+// via this app's own OAuth client.
+//
+// AUTH-003A-3 correction: expectedClientId is now REQUIRED, not
+// optional-with-a-silent-fallback. The previous version treated a
+// missing TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_ID env var as "skip this
+// check" - a misconfiguration (someone forgot to set the var, or the
+// OAuth client isn't registered yet) was therefore indistinguishable
+// from "we've deliberately decided not to scope by client," and the
+// endpoint would keep accepting requests with a real security check
+// quietly inactive. Now: omitting expectedClientId throws at
+// construction time - a loud, immediate, unmissable failure (the
+// process won't even start routing this middleware) - unless the
+// caller explicitly passes allowAnyClient: true, a separate, named,
+// code-reviewable flag that makes the "temporarily unscoped" tradeoff
+// a deliberate decision visible in source control, never an accidental
+// default from an unset env var. There is no production use for
+// allowAnyClient:true today - server.js does not pass it.
 //
 // Fails closed: any verification failure is a 401, never a silent
 // pass-through. Never logs the token itself.
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
-export function createRequireAuth({ supabaseUrl, jwksUri, issuer, audience = 'authenticated', expectedClientId } = {}) {
+export function createRequireAuth({ supabaseUrl, jwksUri, issuer, audience = 'authenticated', expectedClientId, allowAnyClient = false } = {}) {
   // SUPABASE_URL, not VITE_SUPABASE_URL - this runs in the Express
   // backend, not the Vite-built frontend; Vite's VITE_-prefix convention
   // doesn't apply here and there is no build-time inlining to rely on.
@@ -38,6 +53,12 @@ export function createRequireAuth({ supabaseUrl, jwksUri, issuer, audience = 'au
   const url = supabaseUrl || process.env.SUPABASE_URL;
   if (!url && (!jwksUri || !issuer)) {
     throw new Error('requireAuth: supabaseUrl (or SUPABASE_URL) is required unless both jwksUri and issuer are given explicitly.');
+  }
+  if (!expectedClientId && !allowAnyClient) {
+    throw new Error(
+      'requireAuth: expectedClientId is required (client-scoping is a real security boundary - see this file\'s header comment). ' +
+        'If you have deliberately decided to accept tokens from any OAuth client of this project for now, pass allowAnyClient: true explicitly.'
+    );
   }
   const resolvedIssuer = issuer || `${url}/auth/v1`;
   const resolvedJwksUri = jwksUri || `${url}/auth/v1/.well-known/jwks.json`;

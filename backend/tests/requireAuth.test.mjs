@@ -53,7 +53,11 @@ async function run() {
   const baseUrl = `http://127.0.0.1:${port}`;
   const issuer = `${baseUrl}/auth/v1`;
 
-  const requireAuth = createRequireAuth({ jwksUri: `${baseUrl}/auth/v1/.well-known/jwks.json`, issuer, audience: 'authenticated' });
+  // allowAnyClient: true here only because MOST of these cases are
+  // about issuer/audience/signature/expiry, not client scoping - the
+  // client_id-specific behavior (including the REQUIRED-by-default
+  // case) is tested on its own further down with its own instances.
+  const requireAuth = createRequireAuth({ jwksUri: `${baseUrl}/auth/v1/.well-known/jwks.json`, issuer, audience: 'authenticated', allowAnyClient: true });
 
   async function signToken(overrides = {}) {
     return new SignJWT({ role: 'authenticated', client_id: 'test-client', ...overrides })
@@ -213,15 +217,42 @@ async function run() {
     assert(nextCalled, 'A token for the EXPECTED client_id passes, all else being equal');
   }
   {
-    // Without expectedClientId set at all (today's default, until this
-    // app's own OAuth client is registered), client_id is not checked -
-    // confirmed explicitly so this isn't mistaken for always-on.
+    // With allowAnyClient: true EXPLICITLY passed (this test file's own
+    // module-level instance), client_id is not checked - confirmed so
+    // this isn't mistaken for always-on. This flag has no production
+    // caller - server.js never passes it.
     const tokenAnyClient = await signToken({ client_id: 'some-other-client' });
     const req = { headers: { authorization: `Bearer ${tokenAnyClient}` } };
     const res = fakeRes();
     let nextCalled = false;
-    await requireAuth(req, res, () => { nextCalled = true; }); // the module-level requireAuth has no expectedClientId
-    assert(nextCalled, 'Without expectedClientId configured, client_id is not restricted - this is the current, temporary state before this app has its own registered OAuth client');
+    await requireAuth(req, res, () => { nextCalled = true; });
+    assert(nextCalled, 'With allowAnyClient: true explicitly passed, client_id is not restricted');
+  }
+
+  // ===== AUTH-003A-3: omitting expectedClientId (and NOT passing allowAnyClient) is a loud, immediate construction-time failure =====
+  {
+    let threw = false;
+    let message = '';
+    try {
+      createRequireAuth({ jwksUri: `${baseUrl}/auth/v1/.well-known/jwks.json`, issuer, audience: 'authenticated' });
+    } catch (err) {
+      threw = true;
+      message = err.message;
+    }
+    assert(threw, 'Constructing requireAuth with neither expectedClientId nor allowAnyClient throws immediately - a misconfigured deployment fails loudly at startup, never silently runs with client-scoping quietly disabled');
+    assert(/expectedClientId is required/i.test(message), 'The error message names exactly what is missing and why, not a generic failure');
+  }
+  {
+    // allowAnyClient: false (the default) behaves identically to
+    // omitting it - there is no way to accidentally get the unscoped
+    // behavior without the explicit true.
+    let threw = false;
+    try {
+      createRequireAuth({ jwksUri: `${baseUrl}/auth/v1/.well-known/jwks.json`, issuer, audience: 'authenticated', allowAnyClient: false });
+    } catch {
+      threw = true;
+    }
+    assert(threw, 'allowAnyClient: false is equivalent to omitting it entirely - still throws');
   }
 
   await new Promise((resolve) => server.close(resolve));

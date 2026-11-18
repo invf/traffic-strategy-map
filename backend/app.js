@@ -25,7 +25,13 @@ export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetch
     // itself succeeds. The rate limit was already charged in
     // requireEntitlement, before this handler even ran; this is
     // logging, not enforcement.
+    //
+    // No-op when there's no real user id (AUTH-003A-3's temporary
+    // shared-secret mode - see requireSharedSecret.js - establishes no
+    // identity at all). Logging a NULL/garbage user_id would be worse
+    // than not logging; this mode has no per-user accounting by design.
     function logUsage(status, upstreamStatus = null) {
+      if (!userId) return;
       void recordUsage(userId, { path: req.path, at: requestedAt, status, upstreamStatus }).catch((err) => {
         console.error('[server] Usage recording failed (non-fatal):', err?.message ?? err);
       });

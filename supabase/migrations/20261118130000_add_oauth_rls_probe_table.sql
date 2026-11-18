@@ -1,5 +1,5 @@
 -- AUTH-003A-3 - an ISOLATED, disposable table for the OAuth/RLS
--- compatibility proof (supabase/oauth_rls_test.mjs). NOT YET APPLIED.
+-- compatibility proof (supabase/oauth_test/). NOT YET APPLIED.
 --
 -- Deliberately separate from public.strategies: this proof must never
 -- touch real strategies data, and this table's only purpose is to

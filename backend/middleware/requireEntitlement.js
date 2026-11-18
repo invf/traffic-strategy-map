@@ -18,16 +18,28 @@
 // let N concurrent requests all start before any of them count -
 // exactly the race this function exists to prevent.
 //
-// Rate limiting is an in-memory Map, single-process only - the same
-// documented trade-off Launch Studio's SSO session store already
-// accepts for this deployment's scale. A multi-instance deployment
-// would need a shared store (Redis, or a Postgres-backed counter with
-// its own atomic increment, e.g. UPDATE ... SET count = count + 1
-// RETURNING count under the same transaction as the check); noted, not
-// solved here - Render's render.yaml for this service is a single
-// `type: web` instance with no scaling config, so this limitation is
-// not currently live, but would become real the moment this service is
-// ever scaled horizontally.
+// AUTH-003A-3 correction: rate limiting is an in-memory Map,
+// single-process only. State this plainly rather than imply it's a
+// guarantee: this is NOT a production spending ceiling. It resets to
+// ZERO on every process restart (Render redeploys, crashes, routine
+// restarts - not a rare event), so a user's "daily limit" is really
+// "limit per restart interval," which could be many times the stated
+// limit over a real day depending on how often the process restarts.
+// It is also correct only within a single process - Render's
+// render.yaml currently defines this service as one `type: web`
+// instance with no scaling config, so that specific gap isn't live
+// today, but would become real the moment this service is ever scaled
+// horizontally, and nothing enforces that it stays single-instance.
+//
+// backend/lib/quota.js is the prepared, DURABLE replacement - a single
+// atomic Postgres UPSERT (INSERT ... ON CONFLICT ... DO UPDATE ...
+// WHERE), proven correct under genuine concurrency in
+// backend/tests/quota.concurrency.test.mjs (real concurrent Postgres
+// connections, not a mock, not an argument from documentation alone).
+// Survives restarts and is correct across any number of instances,
+// since the lock lives in Postgres, not in this process's own memory.
+// Not yet wired in as the default here - see
+// docs/AUTH_003A_QUOTA_DESIGN.md for why and how to adopt it.
 
 const DEFAULT_DAILY_LIMIT = 50;
 const usageByUser = new Map(); // userId -> { count, resetAt }

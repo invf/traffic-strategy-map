@@ -1,0 +1,9 @@
+{
+  "name": "auth-003a-oauth-test",
+  "private": true,
+  "type": "module",
+  "description": "AUTH-003A-3 OAuth/RLS compatibility test - self-contained so it doesn't depend on the frontend's own install state.",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.1"
+  }
+}
