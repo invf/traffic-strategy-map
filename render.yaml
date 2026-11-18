@@ -9,3 +9,12 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
+      # AUTH-003A - see backend/.env.example for what each of these is
+      # and why; not secrets in the SUPABASE_URL case (it's the same
+      # project URL already public in the frontend bundle), but kept
+      # sync:false here too since this file is the deployment config,
+      # not the place to hardcode any environment's actual value.
+      - key: SUPABASE_URL
+        sync: false
+      - key: TRAFFIC_STRATEGY_MAP_DB_URL
+        sync: false
