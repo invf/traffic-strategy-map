@@ -6,17 +6,24 @@
 -- reviewable artifact, not something this session ran against the real
 -- shared project.
 --
--- AUTH-003A-3 correction: dropping these two columns is ONLY safe
--- BEFORE real users have created real owned rows ("pre-cutover") - once
--- they have, dropping the columns destroys their ownership metadata
--- permanently (the rows survive, but who-owns-what does not). See
--- docs/AUTH_003A_ROLLBACK_PROCEDURES.md for the pre-cutover vs post-
--- cutover procedures - the short version: pre-cutover, drop the
--- columns; post-cutover, `ALTER TABLE public.strategies DISABLE ROW
--- LEVEL SECURITY;` ALONE (never drop the columns) restores fully-open
--- access immediately while preserving every row's real ownership,
--- ready to re-enable once whatever prompted the rollback is fixed.
--- No row is ever deleted by either procedure.
+-- AUTH-003C correction: an earlier version of this comment recommended
+-- `ALTER TABLE public.strategies DISABLE ROW LEVEL SECURITY;` as the
+-- post-cutover rollback. That is UNSAFE once real users have real
+-- owned private rows - it would expose every one of them to anon and
+-- every other authenticated user, not just restore the pre-migration
+-- behavior. It has never been executed against production and must
+-- never be used. The only sanctioned rollback procedures, both
+-- rehearsed against a real disposable stack and both leaving RLS
+-- enabled throughout, are documented in
+-- docs/AUTH_003A_ROLLBACK_PROCEDURES.md: (A) suspend writes via
+-- `REVOKE INSERT, UPDATE, DELETE ON public.strategies FROM authenticated;`
+-- (reads and isolation stay fully intact), or (B) fix one specific
+-- broken policy in place (`DROP POLICY` + `CREATE POLICY` with
+-- corrected logic). Dropping the user_id/is_demo columns themselves
+-- remains safe ONLY before any real owned row exists ("pre-cutover");
+-- once real users have real owned rows, that also becomes unsafe (it
+-- destroys ownership metadata permanently, though no row is deleted) -
+-- use procedure A or B instead. No row is ever deleted by any of these.
 --
 -- is_demo DEFAULT false (not true): the ticket is explicit that existing
 -- ownerless records must NOT be auto-classified as public demo content.
