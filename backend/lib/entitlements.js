@@ -28,6 +28,27 @@ function getPool() {
     if (!connectionString) {
       throw new Error('TRAFFIC_STRATEGY_MAP_DB_URL is not configured.');
     }
+    // AUTH-003C: deliberately NOT a hardcoded `ssl: {...}` object here.
+    // An earlier version of this fix added `ssl: { rejectUnauthorized:
+    // false }` unconditionally, mirroring invf/adveser-platform's own
+    // identical-pattern lib/entitlements/db.ts - but a LOCAL rehearsal
+    // against the disposable Supabase stack's own (non-TLS) Postgres
+    // proved that breaks every non-TLS connection outright ("The
+    // server does not support SSL connections"), including local
+    // development and any future local/CI test that might exercise
+    // this real pool. `pg`'s own connection-string parser (pg-
+    // connection-string) already honors a `?sslmode=` query parameter
+    // and sets the equivalent ssl object automatically - confirmed
+    // directly: `sslmode=require` resolves to a full verify (the
+    // correct, most secure choice for Supabase's own properly-chained
+    // certificates - stronger than adveser-platform's rejectUnauthorized:
+    // false), `sslmode=no-verify` to { rejectUnauthorized: false }, and
+    // no sslmode param at all to no SSL. TLS is therefore a property of
+    // the configured TRAFFIC_STRATEGY_MAP_DB_URL itself (see backend/
+    // .env.example and docs/AUTH_003C_PRODUCTION_RELEASE_PLAN.md for
+    // the exact required value), never hardcoded in code - the same
+    // connection string works correctly whether it points at a real
+    // TLS-requiring Supabase pooler or a local, non-TLS test Postgres.
     pool = new pg.Pool({ connectionString, max: 5 });
   }
   return pool;

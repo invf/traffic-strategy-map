@@ -28,6 +28,17 @@ CREATE INDEX IF NOT EXISTS openai_usage_user_id_requested_at_idx
   ON public.openai_usage (user_id, requested_at DESC);
 
 REVOKE ALL ON public.openai_usage FROM anon, authenticated;
-ALTER TABLE public.openai_usage ENABLE ROW LEVEL SECURITY;
--- No policies created: with RLS enabled and no policy, anon/authenticated
--- get zero rows either way (defense in depth on top of the REVOKE above).
+-- AUTH-003C correction: this file previously ALSO enabled RLS with no
+-- policy at all, on the reasoning that anon/authenticated would then
+-- get zero rows as defense-in-depth on top of the REVOKE above. Local
+-- rehearsal (as the dedicated traffic_strategy_map_app role, over a
+-- real connection, with its own real GRANT INSERT already in place)
+-- proved that reasoning wrong: RLS with zero policies blocks EVERY
+-- non-owner, non-superuser role - including traffic_strategy_map_app
+-- itself, the one role actually meant to write here. The real error
+-- observed: "new row violates row-level security policy for table
+-- openai_usage". The REVOKE above already fully and correctly blocks
+-- anon/authenticated (PostgREST always connects as one of those two;
+-- a REVOKE is unconditional regardless of RLS) - RLS here would only
+-- ever have been redundant for them, while actively breaking the one
+-- real write path. Not enabling RLS on this table at all.

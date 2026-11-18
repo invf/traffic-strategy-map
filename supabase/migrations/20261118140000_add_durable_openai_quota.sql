@@ -26,9 +26,19 @@ CREATE TABLE IF NOT EXISTS public.openai_quota (
 );
 
 REVOKE ALL ON public.openai_quota FROM anon, authenticated;
-ALTER TABLE public.openai_quota ENABLE ROW LEVEL SECURITY;
--- No policies: RLS enabled with none means zero access via PostgREST
--- for anon/authenticated regardless (defense in depth on the REVOKE).
+-- AUTH-003C correction: this file previously ALSO enabled RLS with no
+-- policy at all (same "defense in depth on the REVOKE" reasoning as
+-- 20261118120100_add_openai_usage_tracking.sql, and the same mistake).
+-- Local rehearsal - calling the REAL checkQuota() as the dedicated
+-- traffic_strategy_map_app role, over a real connection, with its own
+-- real GRANT INSERT/UPDATE already in place below - proved this would
+-- have broken the quota system entirely in production: "new row
+-- violates row-level security policy for table openai_quota" on the
+-- very first atomic upsert. RLS applies to every non-owner, non-
+-- superuser role, including the one role meant to write here; the
+-- REVOKE above already fully and correctly blocks anon/authenticated
+-- regardless of RLS (PostgREST always connects as one of those two).
+-- Not enabling RLS on this table at all.
 
 -- Same dedicated role from 20261118120200_provision_app_role.sql -
 -- needs SELECT+INSERT+UPDATE here (the atomic upsert in quota.js is a
