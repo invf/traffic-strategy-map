@@ -20,8 +20,3 @@ services:
         sync: false
       - key: TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_ID
         sync: false
-      # AUTH-003A-3 - set ONLY if deploying the temporary stopgap mode
-      # (see backend/server.js) BEFORE the OAuth client above exists.
-      # Remove once TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_ID is set for real.
-      - key: TEMPORARY_SHARED_SECRET
-        sync: false

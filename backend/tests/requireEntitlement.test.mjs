@@ -1,8 +1,8 @@
-// AUTH-003A - requireEntitlement.js: entitlement gating, rate limiting,
-// and the error/denial/infrastructure-failure distinction.
+// AUTH-003A - requireEntitlement.js: entitlement gating + durable quota
+// reservation (checkQuota is now required DI, no in-memory fallback).
 // Run with: node backend/tests/requireEntitlement.test.mjs
 
-import { createRequireEntitlement, __resetRateLimiterForTests } from '../middleware/requireEntitlement.js';
+import { createRequireEntitlement } from '../middleware/requireEntitlement.js';
 
 let passed = 0;
 let failed = 0;
@@ -27,11 +27,24 @@ function fakeRes() {
   };
 }
 
+function fakeQuotaAllowed(remaining = 10) {
+  return async () => ({ allowed: true, remaining });
+}
+function fakeQuotaDenied() {
+  return async () => ({ allowed: false, remaining: 0 });
+}
+
 async function run() {
-  // ===== No req.userId at all (requireAuth did not run first) =====
+  // ===== Construction requires both checkEntitlement and checkQuota =====
   {
-    __resetRateLimiterForTests();
-    const mw = createRequireEntitlement({ checkEntitlement: async () => 'active' });
+    let threw = false;
+    try { createRequireEntitlement({ checkEntitlement: async () => 'active' }); } catch { threw = true; }
+    assert(threw, 'Constructing without checkQuota throws - there is no in-memory fallback anymore');
+  }
+
+  // ===== No req.userId at all =====
+  {
+    const mw = createRequireEntitlement({ checkEntitlement: async () => 'active', checkQuota: fakeQuotaAllowed() });
     const req = {};
     const res = fakeRes();
     let nextCalled = false;
@@ -39,100 +52,65 @@ async function run() {
     assert(res.statusCode === 500 && !nextCalled, 'Running before requireAuth (no req.userId) is a 500, not silently allowed through');
   }
 
-  // ===== Active entitlement -> allowed =====
+  // ===== Active entitlement + allowed quota -> next() =====
   {
-    __resetRateLimiterForTests();
     let checkedUserId;
-    const mw = createRequireEntitlement({ checkEntitlement: async (id) => { checkedUserId = id; return 'active'; } });
+    let quotaCheckedWith;
+    const mw = createRequireEntitlement({
+      checkEntitlement: async (id) => { checkedUserId = id; return 'active'; },
+      checkQuota: async (id, limit) => { quotaCheckedWith = { id, limit }; return { allowed: true, remaining: 7 }; },
+      dailyLimit: 20,
+    });
     const req = { userId: 'user-a', path: '/api/openai' };
     const res = fakeRes();
     let nextCalled = false;
     await mw(req, res, () => { nextCalled = true; });
-    assert(nextCalled, 'An active entitlement calls next()');
+    assert(nextCalled, 'An active entitlement + allowed quota calls next()');
     assert(checkedUserId === 'user-a', 'checkEntitlement is called with req.userId, never a caller-supplied id');
+    assert(quotaCheckedWith.id === 'user-a' && quotaCheckedWith.limit === 20, 'checkQuota is called with the correct userId AND the configured dailyLimit');
+    assert(res.headers['X-RateLimit-Remaining'] === '7', 'The remaining quota is reported back on the response');
   }
 
-  // ===== No entitlement -> 403, never confused with an infrastructure error =====
+  // ===== No entitlement -> 403, quota never even checked =====
   {
-    __resetRateLimiterForTests();
-    const mw = createRequireEntitlement({ checkEntitlement: async () => 'none' });
+    let quotaCalled = false;
+    const mw = createRequireEntitlement({ checkEntitlement: async () => 'none', checkQuota: async () => { quotaCalled = true; return { allowed: true, remaining: 1 }; } });
     const req = { userId: 'user-b', path: '/api/openai' };
     const res = fakeRes();
     let nextCalled = false;
     await mw(req, res, () => { nextCalled = true; });
-    assert(res.statusCode === 403 && !nextCalled, 'No entitlement -> 403, request never proceeds to call OpenAI');
+    assert(res.statusCode === 403 && !nextCalled, 'No entitlement -> 403');
+    assert(!quotaCalled, 'Quota is never consulted for a non-entitled user - no point reserving quota for someone who cannot proceed anyway');
   }
 
-  // ===== Entitlement check itself fails (DB unreachable) -> 503, never treated as a denial =====
+  // ===== Entitlement check itself fails -> 503 =====
   {
-    __resetRateLimiterForTests();
-    const mw = createRequireEntitlement({ checkEntitlement: async () => 'error' });
+    const mw = createRequireEntitlement({ checkEntitlement: async () => 'error', checkQuota: fakeQuotaAllowed() });
     const req = { userId: 'user-c', path: '/api/openai' };
     const res = fakeRes();
     let nextCalled = false;
     await mw(req, res, () => { nextCalled = true; });
-    assert(res.statusCode === 503 && !nextCalled, "An entitlement-check infrastructure failure is 503 (try again), never 403 (denied) - the two must never be conflated");
+    assert(res.statusCode === 503 && !nextCalled, 'An entitlement-check infrastructure failure is 503, never a denial');
   }
+
+  // ===== Quota denied (at the limit) -> 429 =====
   {
-    __resetRateLimiterForTests();
-    const mw = createRequireEntitlement({ checkEntitlement: async () => { throw new Error('connection refused'); } });
+    const mw = createRequireEntitlement({ checkEntitlement: async () => 'active', checkQuota: fakeQuotaDenied() });
     const req = { userId: 'user-d', path: '/api/openai' };
     const res = fakeRes();
     let nextCalled = false;
     await mw(req, res, () => { nextCalled = true; });
-    assert(res.statusCode === 503 && !nextCalled, 'A thrown error from checkEntitlement is also 503, not an unhandled crash');
+    assert(res.statusCode === 429 && !nextCalled, 'A denied quota (at the daily limit) is 429, never proceeds to call OpenAI');
   }
 
-  // ===== Per-user daily rate limit =====
+  // ===== Quota check itself fails (DB unreachable) -> FAILS CLOSED, 503, never treated as "no limit" =====
   {
-    __resetRateLimiterForTests();
-    const mw = createRequireEntitlement({ checkEntitlement: async () => 'active', dailyLimit: 3 });
+    const mw = createRequireEntitlement({ checkEntitlement: async () => 'active', checkQuota: async () => { throw new Error('connection refused'); } });
     const req = { userId: 'user-e', path: '/api/openai' };
-    let allowedCount = 0;
-    for (let i = 0; i < 5; i++) {
-      const res = fakeRes();
-      let nextCalled = false;
-      await mw(req, res, () => { nextCalled = true; allowedCount++; });
-      if (i < 3) assert(nextCalled, `Request ${i + 1} of 3 within the daily limit is allowed`);
-      else assert(res.statusCode === 429 && !nextCalled, `Request ${i + 1}, beyond the daily limit of 3, is rejected with 429`);
-    }
-    assert(allowedCount === 3, 'Exactly 3 requests were allowed through for this user, never more');
-  }
-
-  // ===== Rate limit is PER USER, not global =====
-  {
-    __resetRateLimiterForTests();
-    const mw = createRequireEntitlement({ checkEntitlement: async () => 'active', dailyLimit: 1 });
-    const reqA = { userId: 'user-f', path: '/api/openai' };
-    const reqB = { userId: 'user-g', path: '/api/openai' };
-    let aAllowed = false;
-    let bAllowed = false;
-    await mw(reqA, fakeRes(), () => { aAllowed = true; });
-    await mw(reqA, fakeRes(), () => {}); // user-f's 2nd request, should be rejected
-    await mw(reqB, fakeRes(), () => { bAllowed = true; });
-    assert(aAllowed, 'User F gets their one allowed request');
-    assert(bAllowed, "User G's own limit is untouched by user F having exhausted theirs - rate limiting is per-user, not shared");
-  }
-
-  // ===== Concurrent requests from the SAME user never both pass a limit of 1 =====
-  // (Usage LOGGING's own fire-and-forget safety is tested separately in
-  // server.test.mjs, since recordUsage now lives there, called after
-  // the OpenAI call resolves - not in this middleware at all.)
-  {
-    __resetRateLimiterForTests();
-    const mw = createRequireEntitlement({ checkEntitlement: async () => 'active', dailyLimit: 1 });
-    let firstNext = false;
-    let secondNext = false;
-    // Both calls are issued before either awaits anything blocking -
-    // checkEntitlement resolves asynchronously for each independently,
-    // but the synchronous counter they both reach afterward has no
-    // window where both can observe "not yet at limit" at once.
-    await Promise.all([
-      mw({ userId: 'user-i', path: '/api/openai' }, fakeRes(), () => { firstNext = true; }),
-      mw({ userId: 'user-i', path: '/api/openai' }, fakeRes(), () => { secondNext = true; }),
-    ]);
-    const allowedCount = [firstNext, secondNext].filter(Boolean).length;
-    assert(allowedCount === 1, 'Two concurrent requests for the SAME user against a limit of 1 result in EXACTLY one allowed, never both, never zero - the synchronous counter has no window for both to pass');
+    const res = fakeRes();
+    let nextCalled = false;
+    await mw(req, res, () => { nextCalled = true; });
+    assert(res.statusCode === 503 && !nextCalled, 'Quota enforcement being unavailable fails CLOSED (503) - it is never silently treated as "no limit, let it through"');
   }
 
   console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);

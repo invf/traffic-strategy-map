@@ -19,6 +19,7 @@
 // rows - RLS is the wrong tool for it.
 
 import pg from 'pg';
+import { checkAndIncrementQuotaAtomic } from './quota.js';
 
 let pool;
 function getPool() {
@@ -44,6 +45,16 @@ export async function checkEntitlement(userId) {
     console.error('[entitlements] checkEntitlement query failed:', err?.message ?? err);
     return 'error';
   }
+}
+
+// AUTH-003A Final Security Corrections: the real, durable quota check
+// wired into requireEntitlement.js - see backend/lib/quota.js for the
+// atomic SQL and backend/tests/quota.concurrency.test.mjs for the
+// concurrency proof. Deliberately does NOT catch its own errors here -
+// requireEntitlement.js's own try/catch treats a thrown error as "fail
+// closed" (503), the same discipline as checkEntitlement above.
+export async function checkQuota(userId, dailyLimit) {
+  return checkAndIncrementQuotaAtomic(getPool(), userId, dailyLimit);
 }
 
 // Called from server.js AFTER the OpenAI call resolves (success or
