@@ -26,6 +26,18 @@ services:
         sync: false
       - key: TRAFFIC_STRATEGY_MAP_DB_URL
         sync: false
+      # AUTH-003C TLS fix - the Supabase Session Pooler's CA certificate
+      # (Supabase Dashboard -> Project Settings -> Database -> SSL
+      # Configuration -> "Download certificate"). REQUIRED in Production:
+      # without it, TRAFFIC_STRATEGY_MAP_DB_URL above fails closed with
+      # "self-signed certificate in certificate chain" against Supabase's
+      # real pooler chain. If Render's own Secret Files feature is used
+      # instead (set via the dashboard, not this blueprint file), set
+      # TRAFFIC_STRATEGY_MAP_DB_CA_CERT_FILE to that mounted path instead
+      # of this inline value - see backend/.env.example and backend/
+      # lib/entitlements.js for both options; only one is needed.
+      - key: TRAFFIC_STRATEGY_MAP_DB_CA_CERT
+        sync: false
       - key: TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_ID
         sync: false
       - key: TRAFFIC_STRATEGY_MAP_OAUTH_CLIENT_SECRET

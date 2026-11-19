@@ -19,7 +19,84 @@
 // rows - RLS is the wrong tool for it.
 
 import pg from 'pg';
+import fs from 'node:fs';
 import { checkAndIncrementQuotaAtomic } from './quota.js';
+
+// AUTH-003C TLS fix: the prior "let the connection string's own ?sslmode=
+// decide" approach (see git history) resolved `sslmode=require` to a FULL
+// verify - correct in principle, but Supabase's Shared Session Pooler
+// presents a chain rooted at a CA that is not in Node's default trust
+// store, so full verification fails with "self-signed certificate in
+// certificate chain". The fix is an explicit CA, not a weaker verification
+// mode (rejectUnauthorized: false and sslmode=no-verify both disable chain
+// AND hostname verification - never used here).
+const SSL_QUERY_PARAM_PATTERN = /^ssl/i;
+
+// Confirmed directly against node_modules/pg/lib/connection-parameters.js:
+// `new pg.Pool({ connectionString, ssl })` runs
+// `config = Object.assign({}, config, parse(connectionString))` - and
+// pg-connection-string's parse() ALWAYS returns its own `ssl` key whenever
+// the string has a `sslmode` param (e.g. `{}` for sslmode=require), which
+// completely overwrites whatever explicit `ssl` object was passed
+// alongside `connectionString`, silently discarding the CA. Stripping the
+// ssl* query params before constructing the Pool is the only way an
+// explicit `ssl` object survives this merge.
+export function stripSslQueryParams(connectionString) {
+  let url;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    // Not URL-shaped (e.g. libpq key=value form) - nothing to strip here;
+    // falls back to whatever that form's own sslmode handling does.
+    return connectionString;
+  }
+  for (const key of [...url.searchParams.keys()]) {
+    if (SSL_QUERY_PARAM_PATTERN.test(key)) {
+      url.searchParams.delete(key);
+    }
+  }
+  return url.toString();
+}
+
+// TRAFFIC_STRATEGY_MAP_DB_CA_CERT_FILE (a mounted PEM file, e.g. a Render
+// "Secret File") is preferred when set, since it needs no escaping.
+// TRAFFIC_STRATEGY_MAP_DB_CA_CERT (the PEM content directly in an env var)
+// is the fallback; a literal "\n" (common when a multi-line PEM is pasted
+// into a single-line env var UI) is normalized to a real newline so it
+// still parses as a valid certificate.
+export function readCaCertificate(env = process.env) {
+  const fromFile = env.TRAFFIC_STRATEGY_MAP_DB_CA_CERT_FILE;
+  if (fromFile) {
+    return fs.readFileSync(fromFile, 'utf8');
+  }
+  const inline = env.TRAFFIC_STRATEGY_MAP_DB_CA_CERT;
+  if (inline) {
+    return inline.includes('\\n') ? inline.replace(/\\n/g, '\n') : inline;
+  }
+  return null;
+}
+
+export function buildPoolConfig(connectionString, env = process.env) {
+  const ca = readCaCertificate(env);
+  if (!ca) {
+    // No CA configured - unchanged from before this fix: TLS (if any) is
+    // entirely decided by the connection string's own ?sslmode= parameter
+    // via pg's own parsing. Required for this to keep working against a
+    // local, non-TLS Postgres (no sslmode param present at all).
+    return { connectionString, max: 5 };
+  }
+  // A CA is configured: verify BOTH the certificate chain (via `ca`) and
+  // the hostname (pg sets `servername` from the connection host whenever
+  // `rejectUnauthorized` isn't explicitly false - confirmed directly
+  // against node_modules/pg/lib/connection.js's upgradeToSSL()). Never
+  // rejectUnauthorized: false, never sslmode=no-verify, never
+  // NODE_TLS_REJECT_UNAUTHORIZED=0.
+  return {
+    connectionString: stripSslQueryParams(connectionString),
+    ssl: { ca, rejectUnauthorized: true },
+    max: 5,
+  };
+}
 
 let pool;
 function getPool() {
@@ -28,28 +105,7 @@ function getPool() {
     if (!connectionString) {
       throw new Error('TRAFFIC_STRATEGY_MAP_DB_URL is not configured.');
     }
-    // AUTH-003C: deliberately NOT a hardcoded `ssl: {...}` object here.
-    // An earlier version of this fix added `ssl: { rejectUnauthorized:
-    // false }` unconditionally, mirroring invf/adveser-platform's own
-    // identical-pattern lib/entitlements/db.ts - but a LOCAL rehearsal
-    // against the disposable Supabase stack's own (non-TLS) Postgres
-    // proved that breaks every non-TLS connection outright ("The
-    // server does not support SSL connections"), including local
-    // development and any future local/CI test that might exercise
-    // this real pool. `pg`'s own connection-string parser (pg-
-    // connection-string) already honors a `?sslmode=` query parameter
-    // and sets the equivalent ssl object automatically - confirmed
-    // directly: `sslmode=require` resolves to a full verify (the
-    // correct, most secure choice for Supabase's own properly-chained
-    // certificates - stronger than adveser-platform's rejectUnauthorized:
-    // false), `sslmode=no-verify` to { rejectUnauthorized: false }, and
-    // no sslmode param at all to no SSL. TLS is therefore a property of
-    // the configured TRAFFIC_STRATEGY_MAP_DB_URL itself (see backend/
-    // .env.example and docs/AUTH_003C_PRODUCTION_RELEASE_PLAN.md for
-    // the exact required value), never hardcoded in code - the same
-    // connection string works correctly whether it points at a real
-    // TLS-requiring Supabase pooler or a local, non-TLS test Postgres.
-    pool = new pg.Pool({ connectionString, max: 5 });
+    pool = new pg.Pool(buildPoolConfig(connectionString));
   }
   return pool;
 }
