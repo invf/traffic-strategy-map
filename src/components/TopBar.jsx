@@ -2,10 +2,12 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Map, Zap, Globe2, BrainCircuit, RotateCcw, Settings,
   ChevronDown, Download, PlusCircle, Cloud, Palette, Check,
-  FolderOpen, Plus, Pencil, Trash2,
+  FolderOpen, Plus, Pencil, Trash2, UploadCloud, Loader2, AlertCircle,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { useAuth } from '../hooks/useAuth';
 import { useTranslation } from '../i18n/useTranslation';
+import { getStrategy, createStrategy, updateStrategy, deleteStrategy } from '../services/strategies';
 import AccountButton from './AccountButton';
 
 const NAV_IDS = ['map', 'traffic', 'ai'];
@@ -249,13 +251,27 @@ function BgPicker({ canvasBg, setCanvasBg, onClose }) {
 
 // ── Project Switcher ──────────────────────────────────────────────────────────
 function ProjectSwitcher() {
-  const { projects, activeProjectId, createProject, switchProject, deleteProject, renameProject } = useStore();
+  const {
+    projects, activeProjectId, activeProjectSource, cloudProjects,
+    createProject, switchProject, deleteProject, renameProject,
+    isDirty, loadStrategy, setActiveCloudProject, removeCloudProject,
+    patchCloudProjectLocal, addCloudProject,
+  } = useStore();
+  const { isAuthenticated } = useAuth();
+  const t = useTranslation();
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
+  const [cloudEditingId, setCloudEditingId] = useState(null);
+  const [cloudEditName, setCloudEditName] = useState('');
+  const [busyId, setBusyId] = useState(null);
+  const [cloudError, setCloudError] = useState(null);
   const ref = useRef(null);
 
-  const active = projects.find((p) => p.id === activeProjectId);
+  const active =
+    activeProjectSource === 'cloud'
+      ? cloudProjects.find((p) => p.id === activeProjectId)
+      : projects.find((p) => p.id === activeProjectId);
 
   useEffect(() => {
     if (!open) return;
@@ -263,11 +279,24 @@ function ProjectSwitcher() {
       if (ref.current && !ref.current.contains(e.target)) {
         setOpen(false);
         setEditingId(null);
+        setCloudEditingId(null);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
+
+  // AUTH-004 requirement 11: a cloud project's unsaved edits only live
+  // in memory (no auto-save) - confirm before navigating away from them.
+  // Local Drafts never need this: switchProject/createProject already
+  // snapshot the live canvas into `projects` before swapping, so nothing
+  // is ever lost switching between Local Drafts.
+  const confirmLeaveIfDirty = () => {
+    if (activeProjectSource === 'cloud' && isDirty()) {
+      return window.confirm(t('cloud_switch_unsaved_confirm'));
+    }
+    return true;
+  };
 
   const commitRename = (id) => {
     if (editName.trim()) renameProject(id, editName.trim());
@@ -280,6 +309,95 @@ function ProjectSwitcher() {
     setEditName(p.name);
   };
 
+  const handleSwitchLocal = (id) => {
+    if (!confirmLeaveIfDirty()) return;
+    switchProject(id);
+    setOpen(false);
+  };
+
+  const handleSwitchCloud = async (p) => {
+    if (p.id === activeProjectId && activeProjectSource === 'cloud') { setOpen(false); return; }
+    if (!confirmLeaveIfDirty()) return;
+    setCloudError(null);
+    setBusyId(p.id);
+    try {
+      const full = await getStrategy(p.id);
+      loadStrategy(full);
+      setOpen(false);
+    } catch (e) {
+      setCloudError(e.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const startCloudEdit = (p, e) => {
+    e.stopPropagation();
+    setCloudEditingId(p.id);
+    setCloudEditName(p.name);
+  };
+
+  const commitCloudRename = async (p) => {
+    const name = cloudEditName.trim();
+    setCloudEditingId(null);
+    if (!name || name === p.name) return;
+    setCloudError(null);
+    try {
+      await updateStrategy(p.id, { name });
+      patchCloudProjectLocal(p.id, { name });
+    } catch (e) {
+      setCloudError(e.message);
+    }
+  };
+
+  const handleDeleteCloud = async (p, e) => {
+    e.stopPropagation();
+    if (!window.confirm(t('cloud_delete_confirm'))) return;
+    setCloudError(null);
+    setBusyId(p.id);
+    try {
+      await deleteStrategy(p.id);
+      removeCloudProject(p.id);
+    } catch (e2) {
+      setCloudError(e2.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // AUTH-004 requirement 14: "Import Local Project into Account" - reads
+  // the DRAFT's own stored canvas (or, if it's the currently active
+  // Local Draft, the live canvas, which is freshest), never the local
+  // draft itself (never mutated/deleted - requirement 13). On a cloud
+  // name collision, prompts for a different name before proceeding;
+  // cancelling the prompt aborts with no API call at all.
+  const handleImportLocal = async (draft, e) => {
+    e.stopPropagation();
+    const live = useStore.getState();
+    const isActiveDraft = activeProjectSource === 'local' && activeProjectId === draft.id;
+    const source = isActiveDraft
+      ? { nodes: live.nodes, edges: live.edges, productInfo: live.productInfo, aiSuggestions: live.aiSuggestions }
+      : { nodes: draft.nodes, edges: draft.edges, productInfo: draft.productInfo, aiSuggestions: draft.aiSuggestions };
+
+    let name = draft.name;
+    if (cloudProjects.some((p) => p.name === name)) {
+      const chosen = window.prompt(t('cloud_import_name_conflict'), `${name} (2)`);
+      if (!chosen || !chosen.trim()) return;
+      name = chosen.trim();
+    }
+
+    setCloudError(null);
+    setBusyId(`import-${draft.id}`);
+    try {
+      const created = await createStrategy({ name, ...source });
+      addCloudProject(created);
+    } catch (err) {
+      setCloudError(err.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div className="relative flex-shrink-0" ref={ref}>
       <button
@@ -290,18 +408,87 @@ function ProjectSwitcher() {
             : 'bg-white/[0.04] border-white/[0.07] text-slate-100 hover:border-indigo-500/30 hover:text-white'
         }`}
       >
-        <FolderOpen size={12} className="text-indigo-400 flex-shrink-0" />
+        {activeProjectSource === 'cloud' ? (
+          <Cloud size={12} className="text-indigo-400 flex-shrink-0" />
+        ) : (
+          <FolderOpen size={12} className="text-indigo-400 flex-shrink-0" />
+        )}
         <span className="truncate">{active?.name || 'Проект'}</span>
         <ChevronDown size={10} className="text-slate-300 flex-shrink-0 ml-0.5" />
       </button>
 
       {open && (
-        <div className="absolute left-0 top-[calc(100%+6px)] w-64 bg-[#111228] border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden">
-          {/* Header */}
+        <div className="absolute left-0 top-[calc(100%+6px)] w-72 bg-[#111228] border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden">
+          {cloudError && (
+            <div className="flex items-start gap-2 px-3 py-2 bg-red-500/10 border-b border-red-500/20">
+              <AlertCircle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+              <p className="text-[11px] text-red-300 flex-1">{cloudError}</p>
+            </div>
+          )}
+
+          {/* Cloud Projects section - only when authenticated */}
+          {isAuthenticated && (
+            <>
+              <div className="px-3 py-2 border-b border-white/[0.07] flex items-center justify-between">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('cloud_section_cloud')}</span>
+              </div>
+              <div className="max-h-48 overflow-y-auto py-1 border-b border-white/[0.07]">
+                {cloudProjects.length === 0 ? (
+                  <p className="px-3 py-2 text-[11px] text-slate-600">{t('cloud_no_strategies')}</p>
+                ) : (
+                  cloudProjects.map((p) => {
+                    const isActiveCloud = activeProjectSource === 'cloud' && p.id === activeProjectId;
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => { if (cloudEditingId !== p.id && busyId !== p.id) handleSwitchCloud(p); }}
+                        className={`group flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
+                          isActiveCloud ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-300 hover:bg-white/5'
+                        }`}
+                      >
+                        {busyId === p.id ? (
+                          <Loader2 size={11} className="animate-spin text-indigo-400 flex-shrink-0" />
+                        ) : (
+                          <Cloud size={11} className="text-indigo-400/70 flex-shrink-0" />
+                        )}
+                        {cloudEditingId === p.id ? (
+                          <input
+                            autoFocus
+                            value={cloudEditName}
+                            onChange={(e) => setCloudEditName(e.target.value)}
+                            onBlur={() => commitCloudRename(p)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') commitCloudRename(p);
+                              if (e.key === 'Escape') setCloudEditingId(null);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex-1 bg-white/10 text-white text-[12px] px-2 py-0.5 rounded border border-indigo-500/50 outline-none min-w-0"
+                          />
+                        ) : (
+                          <span className="flex-1 text-[12px] font-medium truncate">{p.name}</span>
+                        )}
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                          <button onClick={(e) => startCloudEdit(p, e)} className="p-0.5 rounded text-slate-500 hover:text-slate-200 transition-colors" title={t('cloud_rename_btn')}>
+                            <Pencil size={10} />
+                          </button>
+                          <button onClick={(e) => handleDeleteCloud(p, e)} className="p-0.5 rounded text-slate-500 hover:text-red-400 transition-colors" title={t('cloud_delete_btn')}>
+                            <Trash2 size={10} />
+                          </button>
+                        </div>
+                        {isActiveCloud && cloudEditingId !== p.id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Local Drafts section */}
           <div className="px-3 py-2 border-b border-white/[0.07] flex items-center justify-between">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Проекти</span>
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t('cloud_section_local')}</span>
             <button
-              onClick={() => { createProject(); setOpen(false); }}
+              onClick={() => { if (confirmLeaveIfDirty()) { createProject(); setOpen(false); } }}
               className="flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold transition-colors"
             >
               <Plus size={10} />
@@ -309,59 +496,74 @@ function ProjectSwitcher() {
             </button>
           </div>
 
-          {/* List */}
           <div className="max-h-60 overflow-y-auto py-1">
-            {projects.map((p) => (
-              <div
-                key={p.id}
-                onClick={() => { if (editingId !== p.id) { switchProject(p.id); setOpen(false); } }}
-                className={`group flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
-                  p.id === activeProjectId
-                    ? 'bg-indigo-600/20 text-indigo-300'
-                    : 'text-slate-300 hover:bg-white/5'
-                }`}
-              >
-                {editingId === p.id ? (
-                  <input
-                    autoFocus
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onBlur={() => commitRename(p.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitRename(p.id);
-                      if (e.key === 'Escape') setEditingId(null);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    className="flex-1 bg-white/10 text-white text-[12px] px-2 py-0.5 rounded border border-indigo-500/50 outline-none min-w-0"
-                  />
-                ) : (
-                  <span className="flex-1 text-[12px] font-medium truncate">{p.name}</span>
-                )}
+            {projects.map((p) => {
+              const isActiveLocal = activeProjectSource === 'local' && p.id === activeProjectId;
+              return (
+                <div
+                  key={p.id}
+                  onClick={() => { if (editingId !== p.id) handleSwitchLocal(p.id); }}
+                  className={`group flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
+                    isActiveLocal ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  {editingId === p.id ? (
+                    <input
+                      autoFocus
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onBlur={() => commitRename(p.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitRename(p.id);
+                        if (e.key === 'Escape') setEditingId(null);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex-1 bg-white/10 text-white text-[12px] px-2 py-0.5 rounded border border-indigo-500/50 outline-none min-w-0"
+                    />
+                  ) : (
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-[12px] font-medium truncate">{p.name}</span>
+                      {isAuthenticated && (
+                        <span className="block text-[9px] text-slate-600 uppercase tracking-wide">{t('cloud_local_draft_badge')}</span>
+                      )}
+                    </span>
+                  )}
 
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                  <button
-                    onClick={(e) => startEdit(p, e)}
-                    className="p-0.5 rounded text-slate-500 hover:text-slate-200 transition-colors"
-                    title="Перейменувати"
-                  >
-                    <Pencil size={10} />
-                  </button>
-                  {projects.length > 1 && (
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                    {isAuthenticated && (
+                      <button
+                        onClick={(e) => handleImportLocal(p, e)}
+                        disabled={busyId === `import-${p.id}`}
+                        className="p-0.5 rounded text-slate-500 hover:text-indigo-300 transition-colors disabled:opacity-40"
+                        title={t('cloud_import_btn')}
+                      >
+                        {busyId === `import-${p.id}` ? <Loader2 size={10} className="animate-spin" /> : <UploadCloud size={10} />}
+                      </button>
+                    )}
                     <button
-                      onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }}
-                      className="p-0.5 rounded text-slate-500 hover:text-red-400 transition-colors"
-                      title="Видалити"
+                      onClick={(e) => startEdit(p, e)}
+                      className="p-0.5 rounded text-slate-500 hover:text-slate-200 transition-colors"
+                      title="Перейменувати"
                     >
-                      <Trash2 size={10} />
+                      <Pencil size={10} />
                     </button>
+                    {projects.length > 1 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }}
+                        className="p-0.5 rounded text-slate-500 hover:text-red-400 transition-colors"
+                        title="Видалити"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    )}
+                  </div>
+
+                  {isActiveLocal && editingId !== p.id && (
+                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
                   )}
                 </div>
-
-                {p.id === activeProjectId && editingId !== p.id && (
-                  <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

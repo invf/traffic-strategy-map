@@ -12,6 +12,7 @@ import ProductSetupModal from './components/ProductSetupModal';
 import StrategiesModal from './components/StrategiesModal';
 import { generateAISuggestions } from './data/mockData';
 import { useTranslation } from './i18n/useTranslation';
+import { useCloudProjectsSync } from './hooks/useCloudProjectsSync';
 
 // AUTH-003B - backend/routes/ssoRoutes.js redirects a failed sign-in
 // back here as `?sso_error=<code>`, never a raw 500 or a dead end.
@@ -40,6 +41,7 @@ export default function App() {
   const { activeView, showSetup, showStrategies, setAiSuggestions, productInfo, initProjects } = useStore();
   const t = useTranslation();
   const [ssoErrorCode, dismissSsoError] = useSsoErrorBanner();
+  useCloudProjectsSync();
 
   useEffect(() => {
     initProjects();

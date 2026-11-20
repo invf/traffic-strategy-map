@@ -108,6 +108,43 @@ async function run() {
     assert(getRes.status === 200 && getRes.body.name === "A's strategy", "User A's strategy is completely unaffected by User B's attempts - still exists, name unchanged");
   }
 
+  // ===== AUTH-004: concurrent edits / stale-write prevention, against the REAL stack =====
+  // Simulates two browsers both signed in as User A: one ("browser 1")
+  // fetches the row and holds its updated_at; "browser 2" saves a
+  // change first; browser 1's save, still carrying the now-stale
+  // updated_at, must be rejected (409) rather than silently clobbering
+  // browser 2's change - then a fresh save (using the updated_at the
+  // 409 handed back) succeeds. Also proves RLS invisibility still wins
+  // over the new conflict check: User B's conditional PATCH on A's row
+  // gets 404, never 409 - a real cross-user proof, not an assumption.
+  {
+    const browser1Get = await request(appA).get(`/api/strategies/${strategyId}`);
+    assert(browser1Get.status === 200, "Browser 1 (User A) fetches the row and holds its updated_at");
+    const staleUpdatedAt = browser1Get.body.updated_at;
+
+    const browser2Patch = await request(appA)
+      .patch(`/api/strategies/${strategyId}`)
+      .send({ name: "changed by browser 2" });
+    assert(browser2Patch.status === 200, 'Browser 2 (same user, different session) saves first, unconditionally');
+    assert(browser2Patch.body.updated_at !== staleUpdatedAt, "The real row's updated_at actually advanced after browser 2's save (a real Postgres timestamp, not a mocked one)");
+
+    const browser1StalePatch = await request(appA)
+      .patch(`/api/strategies/${strategyId}`)
+      .send({ name: "browser 1's stale edit", expected_updated_at: staleUpdatedAt });
+    assert(browser1StalePatch.status === 409, "Browser 1's save, still carrying the now-stale updated_at, is rejected with 409 against the REAL conditional UPDATE - never silently overwrites browser 2's change");
+    assert(browser1StalePatch.body.current?.name === 'changed by browser 2', "The 409 body carries the row's real current state (browser 2's change), not browser 1's stale view");
+
+    const browser1FreshPatch = await request(appA)
+      .patch(`/api/strategies/${strategyId}`)
+      .send({ name: "browser 1's reconciled edit", expected_updated_at: browser1StalePatch.body.current.updated_at });
+    assert(browser1FreshPatch.status === 200 && browser1FreshPatch.body.name === "browser 1's reconciled edit", "Using the updated_at the 409 just handed back, browser 1's retry succeeds against the real stack");
+
+    const crossUserConditionalPatch = await request(appB)
+      .patch(`/api/strategies/${strategyId}`)
+      .send({ name: 'hijacked', expected_updated_at: browser1FreshPatch.body.updated_at });
+    assert(crossUserConditionalPatch.status === 404, "User B's conditional PATCH on A's row is STILL 404, not 409 - RLS invisibility takes priority over the new conflict check, confirmed against the real stack rather than assumed");
+  }
+
   // ===== User B creates their own - independent of User A's =====
   const createBRes = await request(appB).post('/api/strategies').send({ name: "B's strategy", nodes: [], edges: [], product_info: {}, ai_suggestions: {} });
   assert(createBRes.status === 201 && createBRes.body.user_id === userBId, "User B can create their own strategy, correctly attributed to B's own real id");

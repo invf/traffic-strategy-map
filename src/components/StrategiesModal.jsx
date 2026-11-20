@@ -7,7 +7,7 @@ import { useStore } from '../store/useStore';
 import { useAuth } from '../hooks/useAuth';
 import { buildSignInUrl } from '../services/auth';
 import {
-  listStrategies, getStrategy, createStrategy, deleteStrategy,
+  listStrategies, getStrategy, createStrategy, updateStrategy, deleteStrategy,
   StrategiesApiError, errorKeyForStatus,
 } from '../services/strategies';
 import { useTranslation } from '../i18n/useTranslation';
@@ -58,26 +58,70 @@ function SignedOut({ t }) {
 
 // ── Save Tab ──────────────────────────────────────────────────────────────────
 function SaveTab({ t }) {
-  const { nodes, edges, productInfo, aiSuggestions } = useStore();
+  const {
+    nodes, edges, productInfo, aiSuggestions,
+    activeProjectId, activeProjectSource, activeCloudUpdatedAt,
+    setActiveCloudProject, addCloudProject, patchCloudProjectLocal, loadStrategy,
+  } = useStore();
+  const hasActiveCloudProject = activeProjectSource === 'cloud' && !!activeProjectId;
   const [name, setName] = useState(productInfo.name ? `${productInfo.name} — Strategy` : '');
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState(null); // null | 'update' | 'create'
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
+  // AUTH-004 requirement 12: set only on a 409 from updateStrategy -
+  // the server's current row (camelCased), so the user can choose
+  // instead of either side's edit being silently lost.
+  const [conflict, setConflict] = useState(null);
 
-  const handleSave = async () => {
+  const handleCreate = async () => {
     if (!name.trim()) return;
-    setSaving(true);
+    setSaving('create');
     setError(null);
+    setConflict(null);
     setSaved(false);
     try {
-      await createStrategy({ name: name.trim(), nodes, edges, productInfo, aiSuggestions });
+      const created = await createStrategy({ name: name.trim(), nodes, edges, productInfo, aiSuggestions });
+      addCloudProject(created);
+      setActiveCloudProject(created.id, created.updatedAt);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
       setError(errorMessage(e, t));
     } finally {
-      setSaving(false);
+      setSaving(null);
     }
+  };
+
+  const handleUpdate = async (overwrite = false) => {
+    setSaving('update');
+    setError(null);
+    setConflict(null);
+    setSaved(false);
+    try {
+      const updated = await updateStrategy(activeProjectId, {
+        name: name.trim() || undefined,
+        nodes, edges, productInfo, aiSuggestions,
+        expectedUpdatedAt: overwrite ? undefined : activeCloudUpdatedAt,
+      });
+      patchCloudProjectLocal(updated.id, { name: updated.name, updatedAt: updated.updatedAt });
+      setActiveCloudProject(updated.id, updated.updatedAt);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      if (e instanceof StrategiesApiError && e.status === 409 && e.data?.current) {
+        setConflict(e.data.current);
+      } else {
+        setError(errorMessage(e, t));
+      }
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleReloadLatest = () => {
+    if (!conflict) return;
+    loadStrategy(conflict);
+    setConflict(null);
   };
 
   return (
@@ -93,7 +137,7 @@ function SaveTab({ t }) {
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder={t('cloud_name_placeholder')}
-        onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') (hasActiveCloudProject ? handleUpdate() : handleCreate()); }}
         className="w-full px-4 py-3 text-[13px] rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-slate-600 focus:border-indigo-500/50 focus:outline-none mb-4 transition-colors"
       />
 
@@ -104,19 +148,64 @@ function SaveTab({ t }) {
         </div>
       )}
 
-      <button
-        onClick={handleSave}
-        disabled={saving || !name.trim()}
-        className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors shadow-lg shadow-indigo-500/20"
-      >
-        {saving ? (
-          <><Loader2 size={14} className="animate-spin" /> {t('cloud_saving')}</>
-        ) : saved ? (
-          <><Check size={14} className="text-green-300" /> {t('cloud_saved')}</>
-        ) : (
-          <><Cloud size={14} /> {t('cloud_save_btn')}</>
+      {conflict && (
+        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 mb-4">
+          <div className="flex items-start gap-2 mb-3">
+            <AlertCircle size={13} className="text-amber-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-[12px] font-semibold text-amber-300">{t('cloud_conflict_title')}</p>
+              <p className="text-[11px] text-amber-200/80 mt-0.5">{t('cloud_conflict_hint')}</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleReloadLatest}
+              className="flex-1 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-amber-100 text-[11px] font-semibold transition-colors"
+            >
+              {t('cloud_conflict_reload_btn')}
+            </button>
+            <button
+              onClick={() => handleUpdate(true)}
+              className="flex-1 py-2 rounded-lg bg-amber-600/80 hover:bg-amber-600 text-white text-[11px] font-semibold transition-colors"
+            >
+              {t('cloud_conflict_overwrite_btn')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        {hasActiveCloudProject && (
+          <button
+            onClick={() => handleUpdate(false)}
+            disabled={!!saving}
+            className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors shadow-lg shadow-indigo-500/20"
+          >
+            {saving === 'update' ? (
+              <><Loader2 size={14} className="animate-spin" /> {t('cloud_saving')}</>
+            ) : saved ? (
+              <><Check size={14} className="text-green-300" /> {t('cloud_saved')}</>
+            ) : (
+              <><Cloud size={14} /> {t('cloud_save_update_btn')}</>
+            )}
+          </button>
         )}
-      </button>
+        <button
+          onClick={handleCreate}
+          disabled={!!saving || !name.trim()}
+          className={`flex items-center justify-center gap-2 py-3 rounded-xl disabled:opacity-40 disabled:cursor-not-allowed text-[13px] font-semibold transition-colors ${
+            hasActiveCloudProject
+              ? 'flex-1 bg-white/[0.06] hover:bg-white/[0.1] text-slate-200 border border-white/[0.08]'
+              : 'flex-1 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20'
+          }`}
+        >
+          {saving === 'create' ? (
+            <><Loader2 size={14} className="animate-spin" /> {t('cloud_saving')}</>
+          ) : (
+            <><Cloud size={14} /> {hasActiveCloudProject ? t('cloud_save_new_btn') : t('cloud_save_btn')}</>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
@@ -148,12 +237,11 @@ function LoadTab({ t, onClose }) {
   const handleLoad = async (id) => {
     try {
       const data = await getStrategy(id);
-      loadStrategy({
-        nodes: data.nodes,
-        edges: data.edges,
-        productInfo: data.product_info,
-        aiSuggestions: data.ai_suggestions,
-      });
+      // AUTH-004: loadStrategy now sets the active project identity
+      // atomically with the canvas (fixes the ticket's bug #5) - `data`
+      // already carries `id`/`updatedAt` (services/strategies.js
+      // camelCases the backend's response), so no extra mapping needed.
+      loadStrategy(data);
       setLoadedId(id);
       setTimeout(() => { onClose(); }, 700);
     } catch (e) {
@@ -232,16 +320,16 @@ function LoadTab({ t, onClose }) {
                   {/* Info */}
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-bold text-white leading-snug truncate">{s.name}</p>
-                    {s.product_info?.name && (
+                    {s.productInfo?.name && (
                       <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                        {s.product_info.name}
-                        {s.product_info.goal && (
-                          <span className="text-slate-600"> · {s.product_info.goal}</span>
+                        {s.productInfo.name}
+                        {s.productInfo.goal && (
+                          <span className="text-slate-600"> · {s.productInfo.goal}</span>
                         )}
                       </p>
                     )}
                     <p className="text-[10px] text-slate-600 mt-1">
-                      {t('cloud_updated')}: {formatDate(s.updated_at)}
+                      {t('cloud_updated')}: {formatDate(s.updatedAt)}
                     </p>
                   </div>
 

@@ -168,6 +168,80 @@ async function run() {
     assert(res.status === 404, 'PATCH on a row RLS makes invisible (not owned, not found) -> 404, not a silent no-op success');
   }
 
+  // ===== AUTH-004: PATCH with expected_updated_at - matching value succeeds, and IS included as a second filter =====
+  {
+    let captured;
+    const app = buildApp({
+      ensureValidAccessToken: async () => 'tok',
+      fetchImpl: async (url, init) => {
+        captured = new URL(url);
+        return jsonResponse(200, [{ id: 'abc', name: 'Renamed' }]);
+      },
+    });
+    const res = await request(app)
+      .patch('/api/strategies/abc')
+      .send({ name: 'Renamed', expected_updated_at: '2026-01-01T00:00:00Z' });
+    assert(res.status === 200, 'PATCH with a matching expected_updated_at succeeds exactly like an unconditional PATCH');
+    assert(captured.searchParams.get('id') === 'eq.abc', 'id filter is still present');
+    assert(captured.searchParams.get('updated_at') === 'eq.2026-01-01T00:00:00Z', 'expected_updated_at is sent to PostgREST as a SECOND filter, ANDed with id - a real conditional update, not a client-side check');
+  }
+
+  // ===== AUTH-004: PATCH with expected_updated_at omitted - byte-identical to before this change (regression guard) =====
+  {
+    let captured;
+    const app = buildApp({
+      ensureValidAccessToken: async () => 'tok',
+      fetchImpl: async (url) => {
+        captured = new URL(url);
+        return jsonResponse(200, [{ id: 'abc', name: 'Renamed' }]);
+      },
+    });
+    const res = await request(app).patch('/api/strategies/abc').send({ name: 'Renamed' });
+    assert(res.status === 200, 'Omitting expected_updated_at still succeeds');
+    assert(!captured.searchParams.has('updated_at'), 'No updated_at filter is added when expected_updated_at is not sent - unconditional update, unchanged from before this feature');
+  }
+
+  // ===== AUTH-004: PATCH with a STALE expected_updated_at, row exists -> 409 with the server's current row =====
+  {
+    let call = 0;
+    const app = buildApp({
+      ensureValidAccessToken: async () => 'tok',
+      fetchImpl: async (url, init) => {
+        call += 1;
+        if (call === 1) {
+          // The conditional PATCH itself: id+updated_at filter matches nothing (someone else already changed it).
+          assert(init.method === 'PATCH', 'First call is the conditional PATCH');
+          return jsonResponse(200, []);
+        }
+        // The disambiguation GET: unconditional by id, proves the row DOES exist/is visible.
+        assert(init.method === 'GET', 'Second call (only on an empty conditional PATCH result) is a plain GET by id, to disambiguate 404 vs 409');
+        return jsonResponse(200, [{ id: 'abc', name: 'Changed by someone else', updated_at: '2026-01-02T00:00:00Z' }]);
+      },
+    });
+    const res = await request(app)
+      .patch('/api/strategies/abc')
+      .send({ name: 'My stale edit', expected_updated_at: '2026-01-01T00:00:00Z' });
+    assert(res.status === 409, 'A stale expected_updated_at against a row that still exists/is visible -> 409, never a silent overwrite and never a plain 404');
+    assert(res.body.current?.id === 'abc' && res.body.current?.updated_at === '2026-01-02T00:00:00Z', 'The 409 body carries the server\'s CURRENT row, so the frontend can show what actually changed');
+  }
+
+  // ===== AUTH-004: PATCH with a STALE expected_updated_at, row does NOT exist/is not visible -> 404, not 409 =====
+  {
+    let call = 0;
+    const app = buildApp({
+      ensureValidAccessToken: async () => 'tok',
+      fetchImpl: async () => {
+        call += 1;
+        return jsonResponse(200, []); // both the conditional PATCH and the disambiguation GET come back empty
+      },
+    });
+    const res = await request(app)
+      .patch('/api/strategies/not-mine')
+      .send({ name: 'x', expected_updated_at: '2026-01-01T00:00:00Z' });
+    assert(res.status === 404, 'When the row is not found/not RLS-visible at all, the result is still 404 - the conditional-update feature never turns a real not-found into a 409');
+    assert(call === 2, 'Both the conditional PATCH and the disambiguation GET were attempted');
+  }
+
   // ===== DELETE /api/strategies/:id =====
   {
     const app = buildApp({

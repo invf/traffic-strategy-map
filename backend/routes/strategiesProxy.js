@@ -172,9 +172,20 @@ export function createStrategiesRouter(deps = {}) {
 
   // PATCH, not PUT - partial updates only, matching the "update own"
   // RLS policy's shape and the frontend's existing usage pattern.
+  //
+  // AUTH-004: an optional `expected_updated_at` in the body turns this
+  // into a conditional update (optimistic concurrency, requirement 12 -
+  // "avoid silently overwriting newer changes from another browser").
+  // When present it's added as a SECOND PostgREST filter alongside
+  // `id=eq.<id>` - PostgREST ANDs query-string filters into the
+  // UPDATE's WHERE clause, so `updated_at=eq.<expected>` makes this a
+  // real, Postgres-enforced conditional update, not a client-side
+  // check. Omitting the field keeps this route byte-identical to
+  // before this change (unconditional update) - existing callers are
+  // unaffected.
   router.patch('/api/strategies/:id', async (req, res) => {
     await withAccessToken(req, res, resolved, async (accessToken) => {
-      const { name, nodes, edges, product_info, ai_suggestions } = req.body || {};
+      const { name, nodes, edges, product_info, ai_suggestions, expected_updated_at } = req.body || {};
       const body = { updated_at: new Date().toISOString() };
       if (name !== undefined) body.name = name;
       if (nodes !== undefined) body.nodes = nodes;
@@ -182,18 +193,43 @@ export function createStrategiesRouter(deps = {}) {
       if (product_info !== undefined) body.product_info = product_info;
       if (ai_suggestions !== undefined) body.ai_suggestions = ai_suggestions;
 
+      const query = { id: `eq.${req.params.id}` };
+      if (expected_updated_at !== undefined) {
+        query.updated_at = `eq.${expected_updated_at}`;
+      }
+
       const data = await postgrestRequest(resolved, accessToken, {
         method: 'PATCH',
         path: 'strategies',
-        query: { id: `eq.${req.params.id}` },
+        query,
         body,
         extraHeaders: { Prefer: 'return=representation' },
       });
       if (!Array.isArray(data) || data.length === 0) {
-        // Not a 404 vs 403 distinction - RLS makes another user's row
-        // invisible rather than visibly forbidden, and this proxy must
-        // not leak which case it was.
-        return res.status(404).json({ error: { message: 'Strategy not found.' } });
+        if (expected_updated_at === undefined) {
+          // Not a 404 vs 403 distinction - RLS makes another user's row
+          // invisible rather than visibly forbidden, and this proxy
+          // must not leak which case it was.
+          return res.status(404).json({ error: { message: 'Strategy not found.' } });
+        }
+        // The conditional update matched zero rows - either the row
+        // doesn't exist/isn't RLS-visible (same as the unconditional
+        // case above), OR it exists but updated_at didn't match (someone
+        // else changed it since the caller last fetched it). A single
+        // follow-up unconditional GET disambiguates without ever
+        // leaking RLS-invisible-vs-forbidden either.
+        const current = await postgrestRequest(resolved, accessToken, {
+          method: 'GET',
+          path: 'strategies',
+          query: { select: '*', id: `eq.${req.params.id}` },
+        });
+        if (!Array.isArray(current) || current.length === 0) {
+          return res.status(404).json({ error: { message: 'Strategy not found.' } });
+        }
+        return res.status(409).json({
+          error: { message: 'This strategy was changed elsewhere since you last loaded it.' },
+          current: current[0],
+        });
       }
       res.json(data[0]);
     });

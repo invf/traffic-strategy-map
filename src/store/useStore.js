@@ -17,6 +17,38 @@ const snapshotActive = (s) => {
   );
 };
 
+// AUTH-004 - the canvas fields a cloud project's "is this saved?" check
+// (isDirty, below) and a cloud load/save both snapshot/compare. Kept as
+// one small helper so the two always agree on exactly what counts.
+const canvasSnapshot = (s) => JSON.stringify({ nodes: s.nodes, edges: s.edges, productInfo: s.productInfo, aiSuggestions: s.aiSuggestions });
+
+// AUTH-004 - shared by clearCloudProjects/removeCloudProject: when the
+// cloud project that was active disappears (logout, or its own
+// deletion), fall back to the first Local Draft (same "first remaining
+// entry" convention deleteProject already uses below), or a blank
+// canvas if there are none - never leaves activeProjectSource pointing
+// at a cloud project that's no longer in cloudProjects.
+const fallbackToLocal = (s) => {
+  const fallback = s.projects[0] || null;
+  return {
+    activeProjectSource: 'local',
+    activeProjectId: fallback ? fallback.id : null,
+    activeCloudUpdatedAt: null,
+    lastSyncedSnapshot: null,
+    nodes: fallback?.nodes || INITIAL_NODES,
+    edges: fallback?.edges || INITIAL_EDGES,
+    productInfo: fallback?.productInfo || { ...BLANK_PRODUCT },
+    aiSuggestions: fallback?.aiSuggestions || null,
+    canvasBg: fallback?.canvasBg || '#070818',
+    trafficSources: fallback?.trafficSources || [],
+    customTrafficSources: fallback?.customTrafficSources || [],
+    hiddenSourceIds: fallback?.hiddenSourceIds || [],
+    selectedNodeId: null,
+    showSetup: false,
+    activeView: 'map',
+  };
+};
+
 const makeNodeData = (nodeType) => ({
   label: `New ${NODE_TYPES_CONFIG[nodeType]?.label || 'Node'}`,
   nodeType,
@@ -141,6 +173,89 @@ export const useStore = create(
       renameProject: (id, name) => {
         set((s) => ({ projects: s.projects.map((p) => (p.id === id ? { ...p, name } : p)) }));
       },
+
+      // ── Cloud Projects (AUTH-004) ────────────────────────────────────────────
+      // Fully parallel to the Local Draft state/actions above, never
+      // mixing with them: `projects`/`activeProjectId` keep meaning
+      // "Local Draft" exactly as before this feature. `activeProjectId`
+      // doubles as the active CLOUD project's real Postgres UUID only
+      // when activeProjectSource === 'cloud' (resolved by
+      // getActiveProject, below) - this avoids a second parallel id
+      // field while keeping the two id spaces (ad hoc `proj_...` vs
+      // real UUIDs) unambiguous by construction (they never overlap).
+      //
+      // cloudProjects/activeProjectSource/activeCloudUpdatedAt/
+      // lastSyncedSnapshot are deliberately NOT in this store's
+      // `partialize` below - they stay in-memory only, re-hydrated
+      // fresh from the server on every sign-in (see
+      // src/hooks/useCloudProjectsSync.js). That's what makes "never
+      // display another account's cached private projects" true by
+      // construction rather than by remembering to clear a cache.
+      cloudProjects: [],
+      activeProjectSource: 'local',
+      activeCloudUpdatedAt: null,
+      lastSyncedSnapshot: null,
+
+      getActiveProject: () => {
+        const s = get();
+        if (s.activeProjectSource === 'cloud') {
+          return s.cloudProjects.find((p) => p.id === s.activeProjectId) || null;
+        }
+        return s.projects.find((p) => p.id === s.activeProjectId) || null;
+      },
+
+      // Whether the live canvas differs from what was last loaded/saved
+      // for the CURRENT cloud project - compared lazily on demand
+      // (before a switch/logout/close) rather than tracked on every
+      // node/edge mutation, so this needed no changes to the dozens of
+      // existing canvas-mutating actions above. Local Drafts have no
+      // separate "saved" state to compare against (the canvas IS their
+      // storage, same as always), so this is only meaningful while
+      // activeProjectSource === 'cloud'.
+      isDirty: () => {
+        const s = get();
+        if (s.activeProjectSource !== 'cloud' || s.lastSyncedSnapshot == null) return false;
+        return canvasSnapshot(s) !== s.lastSyncedSnapshot;
+      },
+
+      // Wholesale replace, never merge - called once per sign-in and
+      // once per account switch (see useCloudProjectsSync.js). A merge
+      // here is exactly the bug that would let a previous account's
+      // cached project linger after switching accounts.
+      hydrateCloudProjects: (list) => set({ cloudProjects: Array.isArray(list) ? list : [] }),
+
+      // Called on sign-out. Never deletes anything server-side - purely
+      // clears this tab's own in-memory list and, if a cloud project was
+      // the active one, falls back to a Local Draft so no private cloud
+      // content keeps rendering (or keeps getting persisted to
+      // localStorage) after the session ends.
+      clearCloudProjects: () =>
+        set((s) => (s.activeProjectSource !== 'cloud' ? { cloudProjects: [] } : { cloudProjects: [], ...fallbackToLocal(s) })),
+
+      // Called after a successful create or update - the id is either a
+      // brand-new UUID (create / "Save as New") or the same one being
+      // updated in place ("Save"); either way this is the one place
+      // that (re)establishes "this cloud project is now the saved,
+      // active one," atomically with a fresh dirty-check baseline.
+      setActiveCloudProject: (id, updatedAt) =>
+        set((s) => ({
+          activeProjectId: id,
+          activeProjectSource: 'cloud',
+          activeCloudUpdatedAt: updatedAt ?? null,
+          lastSyncedSnapshot: canvasSnapshot(s),
+        })),
+
+      addCloudProject: (project) => set((s) => ({ cloudProjects: [project, ...s.cloudProjects] })),
+
+      patchCloudProjectLocal: (id, patch) =>
+        set((s) => ({ cloudProjects: s.cloudProjects.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
+
+      removeCloudProject: (id) =>
+        set((s) => {
+          const cloudProjects = s.cloudProjects.filter((p) => p.id !== id);
+          if (s.activeProjectId !== id || s.activeProjectSource !== 'cloud') return { cloudProjects };
+          return { cloudProjects, ...fallbackToLocal(s) };
+        }),
 
       // ── React Flow state ───────────────────────────────────────────────────
       nodes: INITIAL_NODES,
@@ -381,7 +496,13 @@ export const useStore = create(
           trafficSources: [],
         }),
 
-      loadStrategy: ({ nodes, edges, productInfo, aiSuggestions }) =>
+      // AUTH-004: extended to accept the cloud strategy's own id/updatedAt
+      // and set them ATOMICALLY with the canvas fields, in this one
+      // set() call - this is the fix for the ticket's bug #5 ("loading
+      // a cloud strategy updates the canvas but not the active project
+      // identity"). `id` omitted keeps this a Local Draft load (used
+      // nowhere today, but kept harmless rather than assumed unreachable).
+      loadStrategy: ({ id, nodes, edges, productInfo, aiSuggestions, updatedAt }) =>
         set({
           nodes: nodes || [],
           edges: edges || [],
@@ -390,6 +511,15 @@ export const useStore = create(
           selectedNodeId: null,
           showSetup: false,
           activeView: 'map',
+          activeProjectId: id ?? null,
+          activeProjectSource: id ? 'cloud' : 'local',
+          activeCloudUpdatedAt: id ? (updatedAt ?? null) : null,
+          lastSyncedSnapshot: JSON.stringify({
+            nodes: nodes || [],
+            edges: edges || [],
+            productInfo: productInfo || {},
+            aiSuggestions: aiSuggestions || null,
+          }),
         }),
     }),
     {
