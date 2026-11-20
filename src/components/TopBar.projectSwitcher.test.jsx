@@ -28,7 +28,15 @@ vi.mock('../services/strategies', () => ({
 }));
 
 let storeState;
-vi.mock('../store/useStore', () => ({ useStore: () => storeState }));
+vi.mock('../store/useStore', () => {
+  // handleImportLocal (TopBar.jsx) reads the live canvas via
+  // useStore.getState() directly (not the hook) for the "importing the
+  // currently active draft" case - the mock needs that same static
+  // method, matching the real zustand store's own shape.
+  const useStore = () => storeState;
+  useStore.getState = () => storeState;
+  return { useStore };
+});
 
 import TopBar from './TopBar';
 
@@ -148,5 +156,59 @@ describe('TopBar ProjectSwitcher (AUTH-004)', () => {
     expect(storeState.removeCloudProject).toHaveBeenCalledWith(CLOUD_ID);
 
     // Every call above - getStrategy, loadStrategy, updateStrategy, patchCloudProjectLocal, deleteStrategy, removeCloudProject - used the exact same CLOUD_ID, confirmed by the individual assertions above.
+  });
+
+  it('AUTH-004B requirements 4/5: importing a Local Draft whose name matches an existing cloud project prompts for a different name, never silently overwrites it', async () => {
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Local One (2)');
+    createStrategy.mockResolvedValue({ id: 'cloud-new', name: 'Local One (2)', updatedAt: 't1' });
+    storeState = baseStore({ cloudProjects: [{ id: 'cloud-existing', name: 'Local One' }] });
+    render(<TopBar />);
+    openSwitcher();
+
+    fireEvent.click(screen.getByTitle('cloud_import_btn'));
+    await waitFor(() => expect(promptSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(createStrategy).toHaveBeenCalledWith(expect.objectContaining({ name: 'Local One (2)' })));
+    // Never an update to the existing same-named cloud project's id.
+    expect(updateStrategy).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it('AUTH-004B requirement 5: cancelling the duplicate-name prompt aborts the import entirely', async () => {
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue(null);
+    storeState = baseStore({ cloudProjects: [{ id: 'cloud-existing', name: 'Local One' }] });
+    render(<TopBar />);
+    openSwitcher();
+
+    fireEvent.click(screen.getByTitle('cloud_import_btn'));
+    await waitFor(() => expect(promptSpy).toHaveBeenCalledTimes(1));
+    expect(createStrategy).not.toHaveBeenCalled();
+    promptSpy.mockRestore();
+  });
+
+  it('AUTH-004B requirement 8: two rapid clicks on Import only ever fire ONE createStrategy call', async () => {
+    let resolveCreate;
+    createStrategy.mockReturnValue(new Promise((resolve) => { resolveCreate = resolve; }));
+    storeState = baseStore();
+    render(<TopBar />);
+    openSwitcher();
+
+    const importButton = screen.getByTitle('cloud_import_btn');
+    fireEvent.click(importButton);
+    fireEvent.click(importButton);
+    fireEvent.click(importButton);
+
+    resolveCreate({ id: 'cloud-x', name: 'Local One', updatedAt: 't1' });
+    await waitFor(() => expect(storeState.addCloudProject).toHaveBeenCalledTimes(1));
+    expect(createStrategy).toHaveBeenCalledTimes(1);
+  });
+
+  it('AUTH-004B requirement 7: importing the currently ACTIVE Local Draft activates the new cloud project; importing a non-active one does not', async () => {
+    createStrategy.mockResolvedValue({ id: 'cloud-new', name: 'Local One', updatedAt: 't1' });
+    storeState = baseStore(); // activeProjectSource: 'local', activeProjectId: 'proj_1' (matches the only draft)
+    render(<TopBar />);
+    openSwitcher();
+    fireEvent.click(screen.getByTitle('cloud_import_btn'));
+    await waitFor(() => expect(storeState.addCloudProject).toHaveBeenCalledTimes(1));
+    expect(storeState.setActiveCloudProject).toHaveBeenCalledWith('cloud-new', 't1');
   });
 });

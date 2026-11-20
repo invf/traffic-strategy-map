@@ -8,6 +8,7 @@ import { useStore } from '../store/useStore';
 import { useAuth } from '../hooks/useAuth';
 import { useTranslation } from '../i18n/useTranslation';
 import { getStrategy, createStrategy, updateStrategy, deleteStrategy } from '../services/strategies';
+import { resolveUniqueCloudName } from '../lib/cloudProjectNaming';
 import AccountButton from './AccountButton';
 
 const NAV_IDS = ['map', 'traffic', 'ai'];
@@ -267,6 +268,11 @@ function ProjectSwitcher() {
   const [busyId, setBusyId] = useState(null);
   const [cloudError, setCloudError] = useState(null);
   const ref = useRef(null);
+  // AUTH-004B requirement 8: a synchronous guard against a double-click
+  // firing two imports/creates for the same draft before `busyId`'s
+  // state update has taken effect in the DOM - see StrategiesModal.jsx's
+  // identical `inFlightRef` for the full reasoning.
+  const importInFlightRef = useRef(new Set());
 
   const active =
     activeProjectSource === 'cloud'
@@ -373,28 +379,39 @@ function ProjectSwitcher() {
   // cancelling the prompt aborts with no API call at all.
   const handleImportLocal = async (draft, e) => {
     e.stopPropagation();
+    if (importInFlightRef.current.has(draft.id)) return;
+    importInFlightRef.current.add(draft.id);
+
     const live = useStore.getState();
     const isActiveDraft = activeProjectSource === 'local' && activeProjectId === draft.id;
     const source = isActiveDraft
       ? { nodes: live.nodes, edges: live.edges, productInfo: live.productInfo, aiSuggestions: live.aiSuggestions }
       : { nodes: draft.nodes, edges: draft.edges, productInfo: draft.productInfo, aiSuggestions: draft.aiSuggestions };
 
-    let name = draft.name;
-    if (cloudProjects.some((p) => p.name === name)) {
-      const chosen = window.prompt(t('cloud_import_name_conflict'), `${name} (2)`);
-      if (!chosen || !chosen.trim()) return;
-      name = chosen.trim();
-    }
+    // AUTH-004B requirements 4/5: the same shared check StrategiesModal.jsx's
+    // SaveTab uses - a name match only ever prompts for a different name
+    // or aborts, never redirects into updating a different project.
+    const name = resolveUniqueCloudName(draft.name, cloudProjects, { t });
+    if (!name) { importInFlightRef.current.delete(draft.id); return; }
 
     setCloudError(null);
     setBusyId(`import-${draft.id}`);
     try {
       const created = await createStrategy({ name, ...source });
       addCloudProject(created);
+      // AUTH-004B requirement 7: only activate the new cloud project when
+      // the draft just imported IS what the live canvas currently shows -
+      // activating it for a DIFFERENT, not-currently-displayed draft would
+      // mean the next Save pushes the wrong (currently visible) canvas
+      // into this row. Importing a non-active draft still adds it to the
+      // Cloud Projects list; switching to it for real uses the normal
+      // load path (handleSwitchCloud), which fetches its own content.
+      if (isActiveDraft) setActiveCloudProject(created.id, created.updatedAt);
     } catch (err) {
       setCloudError(err.message);
     } finally {
       setBusyId(null);
+      importInFlightRef.current.delete(draft.id);
     }
   };
 

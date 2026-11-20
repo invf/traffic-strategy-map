@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X, Cloud, Save, FolderOpen, Trash2, RefreshCw,
-  Check, AlertCircle, Loader2, Map, LogIn,
+  Check, AlertCircle, Loader2, Map, LogIn, UploadCloud,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useAuth } from '../hooks/useAuth';
@@ -10,6 +10,7 @@ import {
   listStrategies, getStrategy, createStrategy, updateStrategy, deleteStrategy,
   StrategiesApiError, errorKeyForStatus,
 } from '../services/strategies';
+import { resolveUniqueCloudName } from '../lib/cloudProjectNaming';
 import { useTranslation } from '../i18n/useTranslation';
 
 // AUTH-003B - every call in this file goes through services/strategies.js
@@ -59,7 +60,7 @@ function SignedOut({ t }) {
 // ── Save Tab ──────────────────────────────────────────────────────────────────
 function SaveTab({ t }) {
   const {
-    nodes, edges, productInfo, aiSuggestions,
+    nodes, edges, productInfo, aiSuggestions, cloudProjects,
     activeProjectId, activeProjectSource, activeCloudUpdatedAt,
     setActiveCloudProject, addCloudProject, patchCloudProjectLocal, loadStrategy,
   } = useStore();
@@ -73,15 +74,39 @@ function SaveTab({ t }) {
   // instead of either side's edit being silently lost.
   const [conflict, setConflict] = useState(null);
 
+  // AUTH-004B requirement 8: a synchronous ref, checked and set as the
+  // very FIRST thing each handler does - immune to React's render-batch
+  // timing, unlike relying on the `saving` state/the button's `disabled`
+  // attribute alone (both only take effect on the NEXT render, which a
+  // fast double-click or double-tap can beat). This is what actually
+  // guarantees a second overlapping click cannot fire a second POST/PATCH
+  // while one is already in flight.
+  const inFlightRef = useRef(false);
+
   const handleCreate = async () => {
-    if (!name.trim()) return;
+    if (inFlightRef.current || !name.trim()) return;
+    inFlightRef.current = true;
     setSaving('create');
     setError(null);
     setConflict(null);
     setSaved(false);
     try {
-      const created = await createStrategy({ name: name.trim(), nodes, edges, productInfo, aiSuggestions });
+      // AUTH-004B requirements 4/5: check the user's OWN existing cloud
+      // project names before creating a new one - covers both the
+      // first-ever cloud save of a Local Draft (an Import, see this
+      // button's own label below) and "Save as New" from an already-
+      // cloud-backed project. A match only ever prompts for a different
+      // name or aborts - it NEVER redirects into updating the existing,
+      // differently-owned-by-nothing-in-particular same-named row.
+      const resolvedName = resolveUniqueCloudName(name, cloudProjects, { t });
+      if (!resolvedName) return;
+      if (resolvedName !== name) setName(resolvedName);
+
+      const created = await createStrategy({ name: resolvedName, nodes, edges, productInfo, aiSuggestions });
       addCloudProject(created);
+      // AUTH-004B requirement 7: the newly created cloud strategy becomes
+      // the active project immediately - every subsequent Save (not Save
+      // as New) now PATCHes this same UUID, never creates another one.
       setActiveCloudProject(created.id, created.updatedAt);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -89,10 +114,13 @@ function SaveTab({ t }) {
       setError(errorMessage(e, t));
     } finally {
       setSaving(null);
+      inFlightRef.current = false;
     }
   };
 
   const handleUpdate = async (overwrite = false) => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setSaving('update');
     setError(null);
     setConflict(null);
@@ -115,6 +143,7 @@ function SaveTab({ t }) {
       }
     } finally {
       setSaving(null);
+      inFlightRef.current = false;
     }
   };
 
@@ -201,8 +230,16 @@ function SaveTab({ t }) {
         >
           {saving === 'create' ? (
             <><Loader2 size={14} className="animate-spin" /> {t('cloud_saving')}</>
+          ) : hasActiveCloudProject ? (
+            <><Cloud size={14} /> {t('cloud_save_new_btn')}</>
           ) : (
-            <><Cloud size={14} /> {hasActiveCloudProject ? t('cloud_save_new_btn') : t('cloud_save_btn')}</>
+            // AUTH-004B requirement 6: the first cloud save of whatever
+            // is on the canvas right now (a Local Draft, by construction -
+            // activeProjectSource is 'cloud' only when hasActiveCloudProject
+            // is true) is an Import, not a generic "save" - same wording,
+            // same duplicate-name check, as the switcher's per-draft
+            // Import action in TopBar.jsx.
+            <><UploadCloud size={14} /> {t('cloud_import_btn')}</>
           )}
         </button>
       </div>
