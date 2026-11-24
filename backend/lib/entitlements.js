@@ -99,7 +99,13 @@ export function buildPoolConfig(connectionString, env = process.env) {
 }
 
 let pool;
-function getPool() {
+// ADV-002B - exported so backend/lib/sharedProjectAccess.js can reuse the
+// SAME pool/connection (same role, same TLS config, same max:5 sizing)
+// for the new adveser_core.projects/project_members/project_products
+// queries, instead of opening a second pool to the same database as the
+// same role. getPool() itself is unchanged - still lazily constructed,
+// still a module-level singleton either caller can trigger first.
+export function getPool() {
   if (!pool) {
     const connectionString = process.env.TRAFFIC_STRATEGY_MAP_DB_URL;
     if (!connectionString) {

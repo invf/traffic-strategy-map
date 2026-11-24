@@ -161,6 +161,38 @@ async function run() {
     assert(res.headers['cache-control'] === undefined, '/health (not under /api or /auth) is unaffected - this is scoped, not a blanket no-store on every route');
   }
 
+  // ===== ADV-002B: projectsRouter is "absent, not silently degraded" - same
+  // discipline as strategiesRouter, confirmed here at the app-wiring level =====
+  {
+    const app = createApp({ requireAuth: alwaysAuth(), requireEntitlement: alwaysEntitled() });
+    const res = await request(app).get('/api/projects');
+    assert(res.status === 404, 'With no projectsRouter supplied at all (feature flag off in server.js), GET /api/projects is a real 404 - the route does not exist, never a 200 with an empty/default body');
+  }
+  {
+    const fakeRequireSsoAuth = (req, _res, next) => { req.userId = 'user-g'; next(); };
+    const fakeRequireProductEntitlement = (_req, _res, next) => next();
+    let reached = false;
+    const fakeProjectsRouter = (req, res) => { reached = true; res.json({ projects: [] }); };
+    const app = createApp({
+      requireAuth: alwaysAuth(),
+      requireEntitlement: alwaysEntitled(),
+      requireSsoAuth: fakeRequireSsoAuth,
+      requireProductEntitlement: fakeRequireProductEntitlement,
+      projectsRouter: fakeProjectsRouter,
+    });
+    const res = await request(app).get('/api/projects');
+    assert(reached && res.status === 200, 'With projectsRouter (and requireSsoAuth/requireProductEntitlement) supplied, the route IS reachable, through the same two middlewares strategiesRouter uses');
+  }
+  {
+    // projectsRouter alone, without BOTH requireSsoAuth and
+    // requireProductEntitlement also present, must stay unmounted - same
+    // "all three or none" guard as strategiesRouter's own mount condition.
+    const fakeProjectsRouter = (_req, res) => res.json({ projects: [] });
+    const app = createApp({ requireAuth: alwaysAuth(), requireEntitlement: alwaysEntitled(), projectsRouter: fakeProjectsRouter });
+    const res = await request(app).get('/api/projects');
+    assert(res.status === 404, 'projectsRouter alone, without the real auth/entitlement middlewares also configured, never gets mounted unprotected');
+  }
+
   console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);
   if (failed > 0) process.exit(1);
 }

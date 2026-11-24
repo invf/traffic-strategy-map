@@ -2,11 +2,13 @@ import dotenv from 'dotenv';
 import { createApp } from './app.js';
 import { createSsoRouter, ensureValidAccessToken } from './routes/ssoRoutes.js';
 import { createStrategiesRouter } from './routes/strategiesProxy.js';
+import { createProjectsRouter } from './routes/projectsProxy.js';
 import { requireSsoAuth } from './middleware/requireSsoAuth.js';
 import { createRequireEntitlement } from './middleware/requireEntitlement.js';
 import { createRequireProductEntitlement } from './middleware/requireProductEntitlement.js';
 import { requireDisabled } from './middleware/requireDisabled.js';
 import { checkEntitlement, checkQuota, recordUsage } from './lib/entitlements.js';
+import { withSharedProjectTransaction } from './lib/sharedProjectAccess.js';
 import { validateDailyQuota } from './lib/validateDailyQuota.js';
 dotenv.config();
 
@@ -95,6 +97,33 @@ if (strategiesProxyConfigured) {
   console.warn('[server] /api/strategies proxy is NOT mounted (OAuth client, session secret, TRAFFIC_STRATEGY_MAP_DB_URL, SUPABASE_URL, and/or SUPABASE_ANON_KEY missing) - the frontend must keep using its existing direct-Supabase save/load flow until this is configured.');
 }
 
+// ADV-002B - new, OFF-by-default feature flag. Deliberately a SEPARATE
+// env var from strategiesProxyConfigured's own config check below (not
+// folded into it): this is a brand-new, still-unreviewed-by-product
+// capability (listing shared ADVESER Projects) sitting on top of
+// infrastructure (the new adveser_core grants) that must be applied to
+// Production and verified before any real traffic reaches it - a
+// deliberate, explicit opt-in, never implied by unrelated config already
+// being present for an existing, already-shipped feature.
+const sharedProjectsEnabled = process.env.TRAFFIC_STRATEGY_MAP_SHARED_PROJECTS_ENABLED === 'true';
+
+let projectsRouter;
+if (sharedProjectsEnabled && strategiesProxyConfigured) {
+  // Reuses strategiesProxyConfigured's own readiness bar (OAuth client +
+  // session secret + TRAFFIC_STRATEGY_MAP_DB_URL + Supabase URL/anon key)
+  // rather than a second, parallel config check - this route needs
+  // exactly the same real SSO session + entitlement machinery
+  // strategiesRouter already requires, plus the same direct-Postgres
+  // pool entitlements.js already opens (reused, not duplicated, by
+  // sharedProjectAccess.js's withSharedProjectTransaction).
+  projectsRouter = createProjectsRouter({ withSharedProjectTransaction });
+  console.log('[server] /api/projects (shared ADVESER Project listing) is active - feature flag ON.');
+} else if (sharedProjectsEnabled) {
+  console.warn('[server] TRAFFIC_STRATEGY_MAP_SHARED_PROJECTS_ENABLED=true but the underlying SSO/entitlement/DB config is incomplete (same prerequisites as the strategies proxy) - /api/projects is NOT mounted.');
+} else {
+  console.log('[server] /api/projects is disabled (TRAFFIC_STRATEGY_MAP_SHARED_PROJECTS_ENABLED is not "true") - default OFF, per ADV-002B.');
+}
+
 const app = createApp({
   requireAuth,
   requireEntitlement,
@@ -105,6 +134,7 @@ const app = createApp({
   requireSsoAuth,
   requireProductEntitlement,
   strategiesRouter,
+  projectsRouter,
 });
 
 const PORT = process.env.PORT || 3001;

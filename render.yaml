@@ -53,3 +53,8 @@ services:
       # docs/AUTH_003B_PRE_PRODUCTION_AUDIT.md.
       - key: TRAFFIC_STRATEGY_MAP_COOKIE_SAMESITE
         sync: false
+      # ADV-002B - OFF by default (omit, or set to anything other than
+      # "true"). Only set to "true" after the new adveser_core grant
+      # migrations are confirmed applied - see backend/.env.example.
+      - key: TRAFFIC_STRATEGY_MAP_SHARED_PROJECTS_ENABLED
+        sync: false

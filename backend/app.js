@@ -8,7 +8,7 @@
 import express from 'express';
 import cors from 'cors';
 
-export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetchImpl = fetch, recordUsage, frontendUrl = '*', ssoRouter, requireSsoAuth, requireProductEntitlement, strategiesRouter }) {
+export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetchImpl = fetch, recordUsage, frontendUrl = '*', ssoRouter, requireSsoAuth, requireProductEntitlement, strategiesRouter, projectsRouter }) {
   const app = express();
 
   // AUTH-003B: credentials: true is required for the cross-origin SSO
@@ -85,6 +85,16 @@ export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetch
   // routes unmounted (404), never mounted but silently open.
   if (strategiesRouter && requireSsoAuth && requireProductEntitlement) {
     app.use(requireSsoAuth, requireProductEntitlement, strategiesRouter);
+  }
+
+  // ADV-002B - same mount shape and same middleware chain as
+  // strategiesRouter immediately above (identity then entitlement, both
+  // reused as-is - no new auth mechanism). Only present at all when the
+  // feature flag + full SSO/entitlement config is on (see server.js) -
+  // "absent, not silently degraded" if the flag is off, same discipline
+  // as every other conditionally-mounted route in this file.
+  if (projectsRouter && requireSsoAuth && requireProductEntitlement) {
+    app.use(requireSsoAuth, requireProductEntitlement, projectsRouter);
   }
 
   app.post('/api/openai', requireAuth, requireEntitlement, async (req, res) => {
