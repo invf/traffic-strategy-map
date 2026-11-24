@@ -35,6 +35,7 @@
 //   idempotent against a database that already has it applied.)
 
 import pg from 'pg';
+import { withSharedProjectTransaction } from './lib/sharedProjectAccess.js';
 
 const TSM_CONN = { host: '127.0.0.1', port: 5545, database: 'rehearsal', user: 'traffic_strategy_map_app' };
 const LS_CONN = { host: '127.0.0.1', port: 5545, database: 'rehearsal', user: 'launch_studio_app' };
@@ -198,6 +199,31 @@ async function run() {
     await pool.end();
   }
 
+  // ===== ADV-002B-R1: a REAL failed COMMIT genuinely destroys the physical
+  // connection - not a fake client's release(true), the real node-postgres
+  // Pool actually losing that connection from its managed set. Proven via
+  // a deferred UNIQUE constraint violation: both INSERTs below succeed
+  // immediately (the constraint is DEFERRABLE INITIALLY DEFERRED), so this
+  // is a genuine COMMIT-time failure, not a mislabeled statement failure,
+  // on an otherwise perfectly healthy connection =====
+  {
+    const pool = new pg.Pool({ ...TSM_CONN, max: 1 });
+    const beforeTotal = pool.totalCount;
+    let threw = false;
+    try {
+      await withSharedProjectTransaction(owner.id, async (client) => {
+        await client.query(`insert into public._rehearsal_deferred_unique (tag) values ('dup-r1')`);
+        await client.query(`insert into public._rehearsal_deferred_unique (tag) values ('dup-r1')`);
+      }, { getPool: () => pool });
+    } catch (err) {
+      threw = true;
+      assert(/duplicate key|unique constraint/i.test(err.message), `The real COMMIT error itself propagates to the caller, unmasked (got: ${err.message})`);
+    }
+    assert(threw, 'The deferred-constraint violation really does surface at COMMIT, not at either INSERT - a genuine COMMIT failure, not a mislabeled one');
+    assert(pool.totalCount === beforeTotal && pool.idleCount === 0, "The real pg.Pool's managed connection count is back to its starting point and NOTHING is idle - the physical connection withSharedProjectTransaction opened was actually destroyed (release(true)), never left sitting in the pool for a later request to check out with an unverified identity");
+    await pool.end();
+  }
+
   // ===== Structural proof: no changes to existing public.strategies RLS =====
   {
     const before = await super_.query(`select pol.polname as policyname, pol.polcmd as cmd, pg_get_expr(polqual, polrelid) as using_expr, pg_get_expr(polwithcheck, polrelid) as with_check_expr
@@ -210,10 +236,21 @@ async function run() {
     await super_.query(`alter table public.strategies add column source_launch_analysis_id uuid references launch_studio.approved_analysis_exports(id)`);
     await super_.query(`create unique index strategies_one_per_source_export on public.strategies (project_id, source_launch_analysis_id) where source_launch_analysis_id is not null`);
 
+    // ADV-002B-R1: the cross-project export integrity fix, exact statements
+    // from adveser-launch-studio's 0008_... and this repo's own
+    // 20261125090400_... (NOT VALID + VALIDATE, same as those files - no
+    // existing rows yet, so the validate step is instant here, but this is
+    // the real statement sequence, not a shortcut).
+    await super_.query(`alter table launch_studio.approved_analysis_exports add constraint approved_analysis_exports_id_project_unique unique (id, project_id)`);
+    await super_.query(`alter table public.strategies add constraint strategies_source_export_requires_project check (source_launch_analysis_id is null or project_id is not null) not valid`);
+    await super_.query(`alter table public.strategies validate constraint strategies_source_export_requires_project`);
+    await super_.query(`alter table public.strategies add constraint strategies_source_export_project_fk foreign key (source_launch_analysis_id, project_id) references launch_studio.approved_analysis_exports (id, project_id) not valid`);
+    await super_.query(`alter table public.strategies validate constraint strategies_source_export_project_fk`);
+
     const after = await super_.query(`select pol.polname as policyname, pol.polcmd as cmd, pg_get_expr(polqual, polrelid) as using_expr, pg_get_expr(polwithcheck, polrelid) as with_check_expr
       from pg_policy pol join pg_class c on c.oid = pol.polrelid
       where c.relname = 'strategies' order by pol.polname`);
-    assert(JSON.stringify(before.rows) === JSON.stringify(after.rows), 'The new migration (ADD COLUMN x2, CREATE UNIQUE INDEX) leaves public.strategies\' 4 existing RLS policies BYTE-IDENTICAL - a real structural diff, not an assertion');
+    assert(JSON.stringify(before.rows) === JSON.stringify(after.rows), 'The new migrations (ADD COLUMN x2, CREATE UNIQUE INDEX, the new CHECK + composite FK) leave public.strategies\' 4 existing RLS policies BYTE-IDENTICAL - a real structural diff, not an assertion');
   }
 
   // ===== Existing unlinked strategies are completely unaffected =====
@@ -223,6 +260,60 @@ async function run() {
       [owner.id]
     );
     assert(existingStrategy.project_id === null && existingStrategy.source_launch_analysis_id === null, 'A strategy inserted with no awareness of the new columns gets NULL on both - fully backward compatible');
+  }
+
+  // ===== ADV-002B-R1: cross-project export integrity - a mismatched
+  // project_id/export pair is physically impossible to insert =====
+  let projectB, exportForProjectB;
+  {
+    const { rows: [pb] } = await super_.query(
+      `insert into adveser_core.projects (id, owner_user_id, name) values (gen_random_uuid(), $1, 'Project B') returning id`,
+      [owner.id]
+    );
+    projectB = pb.id;
+    await super_.query(`insert into adveser_core.project_members (project_id, user_id, role, added_by) values ($1, $2, 'owner', $2)`, [projectB, owner.id]);
+
+    const { rows: [revB] } = await super_.query(
+      `insert into launch_studio.workspace_revisions (id, project_id, revision, content, created_by) values (gen_random_uuid(), $1, 1, '{}'::jsonb, $2) returning id`,
+      [projectB, owner.id]
+    );
+    const { rows: [expB] } = await super_.query(
+      `insert into launch_studio.approved_analysis_exports (project_id, source_revision_id, product_intelligence, approved_by) values ($1, $2, '{}'::jsonb, $3) returning id`,
+      [projectB, revB.id, owner.id]
+    );
+    exportForProjectB = expB.id;
+
+    let threw = false;
+    try {
+      // project_id = the ORIGINAL project (A), but source_launch_analysis_id
+      // points at an export that really belongs to Project B - exactly the
+      // mismatch this fix exists to prevent.
+      await super_.query(
+        `insert into public.strategies (name, user_id, is_demo, project_id, source_launch_analysis_id) values ($1, $2, false, $3, $4)`,
+        ['Mismatched project/export', owner.id, projectId, exportForProjectB]
+      );
+    } catch (err) {
+      threw = true;
+      assert(/foreign key constraint "strategies_source_export_project_fk"/i.test(err.message), `The rejection is specifically the new composite FK, not some other error (got: ${err.message})`);
+    }
+    assert(threw, 'A strategy cannot claim project_id = A while its source_launch_analysis_id points to an export that really belongs to project B - the composite foreign key makes this physically impossible to insert, not just discouraged');
+  }
+
+  // ===== ADV-002B-R1: setting source_launch_analysis_id without project_id
+  // is ALSO rejected - closes the gap a bare composite FK alone would miss
+  // (MATCH SIMPLE skips the FK check entirely when project_id is NULL) =====
+  {
+    let threw = false;
+    try {
+      await super_.query(
+        `insert into public.strategies (name, user_id, is_demo, project_id, source_launch_analysis_id) values ($1, $2, false, null, $3)`,
+        ['Export without project', owner.id, exportForProjectB]
+      );
+    } catch (err) {
+      threw = true;
+      assert(/strategies_source_export_requires_project/i.test(err.message), `The rejection is specifically the new CHECK constraint, not some other error (got: ${err.message})`);
+    }
+    assert(threw, 'source_launch_analysis_id set with project_id left NULL is rejected by the CHECK constraint - without it, the composite FK alone would have silently skipped validation entirely (MATCH SIMPLE never checks an FK with any NULL column)');
   }
 
   // ===== Concurrent duplicate creation - the idempotency index =====

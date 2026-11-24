@@ -20,21 +20,19 @@ function assert(condition, message) {
 
 function fakeClient(queryImpl) {
   const calls = [];
+  const releaseArgs = [];
   return {
     calls,
+    releaseArgs,
     query: async (text, params) => {
       calls.push({ text, params });
       return queryImpl ? queryImpl(text, params) : { rows: [] };
     },
-  };
-}
-
-function fakePool(client) {
-  let released = false;
-  return {
-    connect: async () => client,
-    get released() { return released; },
-    _markReleased: () => { released = true; },
+    // node-postgres's own documented release(err) mechanism: a truthy
+    // argument destroys the client instead of returning it to the pool.
+    // Every test below asserts on releaseArgs[0] to prove WHICH of the
+    // two actually happened, not just that release() was called at all.
+    release: (err) => { releaseArgs.push(err); },
   };
 }
 
@@ -54,13 +52,10 @@ async function run() {
     assert(!connectCalled, 'getPool().connect() is never called when userId is falsy - fails closed before opening anything');
   }
 
-  // ===== Success path: BEGIN, parameterized set_config, fn, COMMIT, release =====
+  // ===== Success path: BEGIN, parameterized set_config, fn, COMMIT, clean release =====
   {
     const client = fakeClient();
-    let released = false;
-    const pool = { connect: async () => client, release: () => {} };
-    client.release = () => { released = true; };
-    const getPool = () => pool;
+    const getPool = () => ({ connect: async () => client });
 
     const result = await withSharedProjectTransaction('user-123', async (c) => {
       assert(c === client, 'The callback receives the SAME client instance withSharedProjectTransaction itself used for BEGIN/set_config');
@@ -75,14 +70,13 @@ async function run() {
     assert(texts[2] === 'COMMIT', 'Third statement is COMMIT (the callback itself ran between set_config and COMMIT, not as a captured query)');
     assert(texts[3] === 'SELECT set_config($1, $2, false)', 'After COMMIT, the GUC is reset to a session-level (non-LOCAL) sentinel BEFORE release - see NIL_USER_ID header comment: a custom GUC never truly reverts to NULL on this connection once touched, only to an empty string that crashes a later ::uuid cast, so this leaves the connection cast-safe for whatever unrelated query runs on it next');
     assert(JSON.stringify(client.calls[3].params) === JSON.stringify(['app.current_user_id', '00000000-0000-0000-0000-000000000000']), 'The reset value is the reserved nil UUID - cast-safe, and never matching any real user');
-    assert(released, 'The client is released back to the pool after a successful run');
+    assert(client.releaseArgs.length === 1, 'release() is called exactly once');
+    assert(client.releaseArgs[0] === undefined, 'On a clean success, release() is called with NO argument - a verified-clean connection returns to the pool normally, never destroyed');
   }
 
-  // ===== Failure path: ROLLBACK runs, release still happens, original error propagates =====
+  // ===== Failure path with a clean ROLLBACK: reset still runs, clean release, original error propagates =====
   {
     const client = fakeClient();
-    let released = false;
-    client.release = () => { released = true; };
     const getPool = () => ({ connect: async () => client });
 
     let thrown = null;
@@ -98,32 +92,28 @@ async function run() {
     assert(texts.includes('ROLLBACK'), 'ROLLBACK is issued when the callback throws');
     assert(!texts.includes('COMMIT'), 'COMMIT is never reached on the failure path');
     assert(texts[texts.length - 1] === 'SELECT set_config($1, $2, false)', 'The GUC is reset to the nil-UUID sentinel on the FAILURE path too - a connection must never be left poisoned just because this particular use ended in a ROLLBACK');
-    assert(released, 'The client is still released even though the transaction failed - no connection leak');
+    assert(client.releaseArgs.length === 1 && client.releaseArgs[0] === undefined, 'A failure that ROLLBACK cleanly recovered from is still a VERIFIED-clean connection - released normally, not destroyed');
   }
 
-  // ===== A failed reset itself never masks the real result or error, and release still happens =====
+  // ===== A failed reset after a clean COMMIT: the connection is DESTROYED, never silently reused, but the real result still returns =====
   {
     const client = fakeClient(async (text) => {
       if (text === 'SELECT set_config($1, $2, false)') throw new Error('reset failed - connection already dead');
       return { rows: [] };
     });
-    let released = false;
-    client.release = () => { released = true; };
     const getPool = () => ({ connect: async () => client });
 
     const result = await withSharedProjectTransaction('user-123', async () => 'real-result', { getPool });
-    assert(result === 'real-result', 'A failed best-effort reset after COMMIT never masks the real, already-returned callback result');
-    assert(released, 'release() still runs even when the post-transaction reset itself throws');
+    assert(result === 'real-result', 'A failed cleanup after COMMIT never masks the real, already-returned callback result');
+    assert(client.releaseArgs.length === 1 && client.releaseArgs[0] === true, 'release(true) - the documented node-postgres mechanism - is used to DESTROY the connection when the GUC reset itself fails, rather than returning it to the pool unverified');
   }
 
-  // ===== A failed ROLLBACK itself never masks the original error =====
+  // ===== A failed ROLLBACK: the connection is DESTROYED, the reset is never even attempted, and the original error still wins =====
   {
     const client = fakeClient(async (text) => {
       if (text === 'ROLLBACK') throw new Error('connection already dead');
       return { rows: [] };
     });
-    let released = false;
-    client.release = () => { released = true; };
     const getPool = () => ({ connect: async () => client });
 
     let thrown = null;
@@ -135,7 +125,30 @@ async function run() {
       thrown = err;
     }
     assert(thrown?.message === 'the real, original failure', "The original error wins even when ROLLBACK itself also fails - a failed rollback is swallowed, never thrown in its place");
-    assert(released, 'The client is still released even when ROLLBACK itself throws');
+    const texts = client.calls.map((c) => c.text);
+    assert(!texts.includes('SELECT set_config($1, $2, false)'), "The GUC reset is NEVER attempted once ROLLBACK has failed - no more SQL is risked on a connection whose transaction state can't be proven");
+    assert(client.releaseArgs.length === 1 && client.releaseArgs[0] === true, "A failed ROLLBACK means the connection's state is unverifiable - release(true) destroys it outright, so no later request can ever reuse a connection carrying an unverified identity");
+  }
+
+  // ===== A failed COMMIT: ambiguous outcome, so ROLLBACK is never attempted either - the connection is destroyed and the COMMIT error itself propagates =====
+  {
+    const client = fakeClient(async (text) => {
+      if (text === 'COMMIT') throw new Error('connection reset by peer during commit');
+      return { rows: [] };
+    });
+    const getPool = () => ({ connect: async () => client });
+
+    let thrown = null;
+    try {
+      await withSharedProjectTransaction('user-123', async () => 'would-be-result', { getPool });
+    } catch (err) {
+      thrown = err;
+    }
+    assert(thrown?.message === 'connection reset by peer during commit', 'A failed COMMIT propagates its OWN error - never masked, and the callback\'s successful return value is never surfaced as if the transaction had actually committed');
+    const texts = client.calls.map((c) => c.text);
+    assert(!texts.includes('ROLLBACK'), "ROLLBACK is never attempted after a failed COMMIT - whether the transaction committed, aborted, or is stuck mid-way is genuinely ambiguous, so nothing more is guessed at");
+    assert(!texts.includes('SELECT set_config($1, $2, false)'), 'The GUC reset is never attempted either, for the same reason');
+    assert(client.releaseArgs.length === 1 && client.releaseArgs[0] === true, 'A failed COMMIT leaves the transaction outcome unverifiable - release(true) destroys the connection rather than risk reuse');
   }
 
   console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);

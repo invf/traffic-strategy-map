@@ -206,6 +206,18 @@ grant select on launch_studio.approved_analysis_exports to traffic_strategy_map_
 grant usage on schema public to traffic_strategy_map_app;
 grant select, insert on public.strategies to traffic_strategy_map_app;
 
+-- ADV-002B-R1 - scratch table used ONLY to force a REAL COMMIT failure (a
+-- deferred UNIQUE violation, caught at COMMIT time rather than at either
+-- INSERT) against a real connection, to prove withSharedProjectTransaction
+-- actually destroys that physical connection rather than merely claiming
+-- to. Not part of any real schema - exists only for this rehearsal.
+create table public._rehearsal_deferred_unique (
+  id uuid primary key default gen_random_uuid(),
+  tag text not null,
+  constraint _rehearsal_deferred_unique_tag unique (tag) deferrable initially deferred
+);
+grant select, insert on public._rehearsal_deferred_unique to traffic_strategy_map_app;
+
 grant usage on schema launch_studio to launch_studio_app;
 grant select, insert on launch_studio.approved_analysis_exports to launch_studio_app; -- no update/delete, by design
 grant usage on schema adveser_core to launch_studio_app;

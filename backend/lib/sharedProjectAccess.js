@@ -78,39 +78,69 @@ export async function withSharedProjectTransaction(userId, fn, { getPool = realG
   }
 
   const client = await getPool().connect();
+  // ADV-002B-R1 - tracks whether we can still VOUCH for this connection's
+  // transaction state. Once true, nothing more is attempted on it (not
+  // even the GUC reset below) - it is destroyed outright in `finally`.
+  // Set in exactly two places: a failed COMMIT (ambiguous - committed?
+  // aborted? mid-way? never guess), and a failed ROLLBACK after some
+  // other failure (the connection may already be unusable, or may still
+  // be sitting inside an open transaction we can no longer close safely).
+  let transactionStateUncertain = false;
   try {
     await client.query('BEGIN');
     // Parameterized, never string-concatenated - the one place in this
     // file identity is ever written into a session variable.
     await client.query('SELECT set_config($1, $2, true)', ['app.current_user_id', userId]);
     const result = await fn(client);
-    await client.query('COMMIT');
+    try {
+      await client.query('COMMIT');
+    } catch (commitErr) {
+      transactionStateUncertain = true;
+      throw commitErr;
+    }
     return result;
   } catch (err) {
-    try {
-      await client.query('ROLLBACK');
-    } catch {
-      // Connection may already be unusable (e.g. BEGIN itself failed) -
-      // the original error is what matters; a failed rollback is never
-      // masked by throwing it instead.
+    if (!transactionStateUncertain) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // ROLLBACK itself failed (or there was nothing to roll back
+        // because BEGIN never succeeded) - the connection's state can no
+        // longer be proven clean.
+        transactionStateUncertain = true;
+      }
     }
+    // The ORIGINAL error (err) always wins - a rollback/commit failure
+    // caught above is never thrown in its place, and is never what the
+    // caller sees.
     throw err;
   } finally {
-    // Runs on every exit path, success or failure, BEFORE the connection
-    // goes back to the pool. Deliberately session-level (third arg false,
-    // not true/LOCAL) and OUTSIDE any transaction - this is what's left
-    // behind for whichever request (this app's own, or a totally unrelated
-    // one, e.g. checkEntitlement()) next checks out this same connection.
-    // Swallowed, not awaited-into-throw: a failure here must never mask the
-    // real result/error from the transaction above, and must never prevent
-    // client.release() from running.
-    try {
-      await client.query('SELECT set_config($1, $2, false)', ['app.current_user_id', NIL_USER_ID]);
-    } catch {
-      // Best-effort hygiene only. Worst case if this itself fails (e.g. the
-      // connection is already broken) is the status quo bug this exists to
-      // prevent - never a new, worse failure mode.
+    if (transactionStateUncertain) {
+      // Never attempt more SQL on a connection whose transaction outcome
+      // we can't vouch for - not even the GUC reset below. Destroy it
+      // outright via node-postgres's documented release(err) mechanism: a
+      // truthy argument removes the client from the pool and closes it,
+      // rather than returning it for reuse. This is what guarantees no
+      // later request can ever check out a connection carrying an
+      // unverified identity.
+      client.release(true);
+    } else {
+      // Runs on every clean exit, success or a cleanly-rolled-back
+      // failure, BEFORE the connection goes back to the pool. Deliberately
+      // session-level (third arg false, not true/LOCAL) and OUTSIDE any
+      // transaction - this is what's left behind for whichever request
+      // (this app's own, or a totally unrelated one, e.g.
+      // checkEntitlement()) next checks out this same connection.
+      try {
+        await client.query('SELECT set_config($1, $2, false)', ['app.current_user_id', NIL_USER_ID]);
+        client.release();
+      } catch {
+        // The reset itself failed - we can no longer prove this
+        // connection is safe to reuse, even though the transaction above
+        // committed/rolled back cleanly. Destroy it too, for the same
+        // reason: never hand back a connection we can't vouch for.
+        client.release(true);
+      }
     }
-    client.release();
   }
 }
