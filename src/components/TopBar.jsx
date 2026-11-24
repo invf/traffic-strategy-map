@@ -10,6 +10,7 @@ import { useTranslation } from '../i18n/useTranslation';
 import { getStrategy, createStrategy, updateStrategy, deleteStrategy } from '../services/strategies';
 import { resolveUniqueCloudName } from '../lib/cloudProjectNaming';
 import AccountButton from './AccountButton';
+import AdveserProjectsSelector from './AdveserProjectsSelector';
 
 const NAV_IDS = ['map', 'traffic', 'ai'];
 const NAV_ICONS = { map: Map, traffic: Globe2, ai: BrainCircuit };
@@ -652,8 +653,13 @@ export default function TopBar() {
         </div>
       </div>
 
-      {/* Project switcher */}
+      {/* Project switcher (Cloud Projects / Local Drafts) */}
       <ProjectSwitcher />
+
+      {/* ADV-003: ADVESER Projects - a separate, cross-product concept
+          from the Cloud Projects/Local Drafts above; see
+          AdveserProjectsSelector.jsx's own header comment. */}
+      <AdveserProjectsSelector />
 
       {/* Nav tabs */}
       <nav className="flex items-center gap-1 bg-white/[0.04] rounded-xl p-1 border border-white/[0.05]">

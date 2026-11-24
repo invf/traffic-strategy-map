@@ -257,6 +257,36 @@ export const useStore = create(
           return { cloudProjects, ...fallbackToLocal(s) };
         }),
 
+      // ── ADV-003: ADVESER Projects (adveser_core.projects, shared with
+      // Launch Studio) ────────────────────────────────────────────────────
+      // Deliberately a SEPARATE, parallel slice from cloudProjects/
+      // activeProjectSource/activeProjectId above - an ADVESER Project is
+      // NOT a cloud strategy. Selecting one here is a pure CONTEXT choice
+      // (which shared project this browser tab is currently "in," for
+      // cross-product navigation/identity) - it never loads, creates, or
+      // modifies a strategy by itself; that stays entirely under the
+      // existing projects/cloudProjects mechanism above, untouched. Not in
+      // `partialize` below, same reasoning as cloudProjects: re-hydrated
+      // fresh per sign-in (see src/hooks/useAdveserProjectsSync.js), never
+      // cached across accounts.
+      adveserProjects: [],
+      activeAdveserProjectId: null,
+
+      hydrateAdveserProjects: (list) => set({ adveserProjects: Array.isArray(list) ? list : [] }),
+
+      clearAdveserProjects: () => set({ adveserProjects: [], activeAdveserProjectId: null }),
+
+      // The ONLY way activeAdveserProjectId is ever set. Deliberately
+      // requires the id to already be present in `adveserProjects` (the
+      // server-verified, membership-scoped list) - this is what makes "a
+      // project UUID in a URL is never treated as authorization" true by
+      // construction: a caller reading an incoming URL param must still
+      // look it up in adveserProjects first (see useAdveserProjectsSync.js)
+      // and this setter silently refuses an id that isn't actually there,
+      // rather than trusting whatever string it's handed.
+      setActiveAdveserProject: (id) =>
+        set((s) => (id != null && !s.adveserProjects.some((p) => p.id === id) ? {} : { activeAdveserProjectId: id })),
+
       // ── React Flow state ───────────────────────────────────────────────────
       nodes: INITIAL_NODES,
       edges: INITIAL_EDGES,

@@ -65,6 +65,13 @@ function baseStore(overrides = {}) {
     removeCloudProject: vi.fn(),
     patchCloudProjectLocal: vi.fn(),
     addCloudProject: vi.fn(),
+    // ADV-003 - fields AdveserProjectsSelector reads; TopBar now renders
+    // it alongside ProjectSwitcher (see TopBar.jsx), so the mocked store
+    // needs these too, even though this file's own tests are about
+    // ProjectSwitcher, not this component (see its own test file).
+    adveserProjects: [],
+    activeAdveserProjectId: null,
+    setActiveAdveserProject: vi.fn(),
     ...overrides,
   };
 }
