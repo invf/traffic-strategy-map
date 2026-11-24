@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import ConnectionParameters from 'pg/lib/connection-parameters.js';
-import { buildPoolConfig, readCaCertificate, stripSslQueryParams } from '../lib/entitlements.js';
+import { buildPoolConfig, readCaCertificate, stripSslQueryParams, assertSessionPoolerMode } from '../lib/entitlements.js';
 
 let passed = 0;
 let failed = 0;
@@ -104,6 +104,43 @@ async function run() {
       !merged.ssl || merged.ssl.ca !== 'SHOULD-BE-LOST',
       'negative control: passing ssl alongside an UN-stripped sslmode connection string reproduces the silent-override bug - confirms stripSslQueryParams is load-bearing, not redundant'
     );
+  }
+
+  // ===== ADV-002B-R1: assertSessionPoolerMode =====
+  {
+    let threw = false;
+    try { assertSessionPoolerMode(REAL_SHAPED_URL); } catch { threw = true; }
+    assert(!threw, 'The real, documented Production URL (session pooler, port 5432) never throws');
+  }
+  {
+    const transactionPoolerUrl = 'postgresql://traffic_strategy_map_app.eukogyljakqafnuvrfiv:CHANGE_ME@aws-0-eu-west-1.pooler.supabase.com:6543/postgres';
+    let thrown = null;
+    try { assertSessionPoolerMode(transactionPoolerUrl); } catch (err) { thrown = err; }
+    assert(thrown !== null, "Supabase's TRANSACTION pooler (pooler.supabase.com, port 6543) is rejected outright, before any pool is ever constructed");
+    assert(/transaction pooler/i.test(thrown?.message ?? ''), 'The error clearly names WHAT is wrong (the transaction pooler), not a generic connection failure');
+    assert(/6543/.test(thrown?.message ?? ''), 'The error names the specific offending port, for a fast diagnosis');
+  }
+  {
+    // Scoped NARROWLY to Supabase's own pooler hostname convention - an
+    // unrelated service that happens to use port 6543 for some other
+    // reason (or a local rehearsal database on an arbitrary port) is
+    // never rejected by this check.
+    const unrelatedServiceOn6543 = 'postgresql://someuser:pw@example.com:6543/somedb';
+    let threw = false;
+    try { assertSessionPoolerMode(unrelatedServiceOn6543); } catch { threw = true; }
+    assert(!threw, 'A non-Supabase-pooler host on port 6543 is NOT rejected - this check targets the one real, documented risk, not every use of that port number');
+  }
+  {
+    const localRehearsalUrl = 'postgresql://traffic_strategy_map_app@127.0.0.1:5545/rehearsal';
+    let threw = false;
+    try { assertSessionPoolerMode(localRehearsalUrl); } catch { threw = true; }
+    assert(!threw, 'A local disposable rehearsal database on an arbitrary port is never rejected');
+  }
+  {
+    const notAUrl = 'host=localhost dbname=postgres';
+    let threw = false;
+    try { assertSessionPoolerMode(notAUrl); } catch { threw = true; }
+    assert(!threw, 'A non-URL-shaped (libpq key=value) connection string is let through unchanged, not thrown on - same convention as stripSslQueryParams');
   }
 
   console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);

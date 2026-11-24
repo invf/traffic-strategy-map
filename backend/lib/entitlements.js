@@ -98,6 +98,51 @@ export function buildPoolConfig(connectionString, env = process.env) {
   };
 }
 
+// ADV-002B-R1 - backend/lib/sharedProjectAccess.js's withSharedProjectTransaction()
+// depends on an assumption that, until now, was documented only in a
+// .env.example comment and never verified by the code itself: that each
+// pg.Pool client maps to a DEDICATED backend Postgres session for its
+// entire lifetime. That holds for Supabase's SESSION pooler (port 5432) -
+// confirmed directly against Supabase's own docs: session mode "forc[es]
+// the pooler... to grant an underlying direct connection exclusively to a
+// single client connection" and "behaves nearly identically to a standard
+// direct connection." It does NOT hold for Supabase's TRANSACTION pooler
+// (port 6543), which explicitly "Does not support session-level features
+// (SET, ...)" - there, a backend connection can be hashed out to a
+// DIFFERENT client between transactions, so a GUC reset issued as its own
+// statement after COMMIT (sharedProjectAccess.js's own cleanup step)
+// could land on an entirely unrelated backend instead of the one that
+// actually needs resetting.
+//
+// Nothing stopped a future change to TRAFFIC_STRATEGY_MAP_DB_URL (e.g.
+// "simplifying" to Supabase's commonly-recommended pooler endpoint for
+// serverless workloads) from silently re-exposing exactly the risk
+// ADV-002B-R1 was asked to rule out. This check makes the assumption
+// explicit and fails closed, loudly, at startup - never a silent
+// degradation into intermittent 22P02 crashes under load once traffic
+// actually exercises the shared-project code path.
+//
+// Scoped narrowly to Supabase's OWN documented transaction-pooler
+// hostname+port convention - never rejects an unrelated direct connection
+// (a local rehearsal database on an arbitrary port, for instance), and
+// never the session-pooler or a direct Production connection on 5432.
+export function assertSessionPoolerMode(connectionString) {
+  let url;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    return; // not URL-shaped (libpq key=value form) - nothing to check here
+  }
+  if (/\.pooler\.supabase\.com$/i.test(url.hostname) && url.port === '6543') {
+    throw new Error(
+      "TRAFFIC_STRATEGY_MAP_DB_URL points at Supabase's TRANSACTION pooler (port 6543). " +
+      'backend/lib/sharedProjectAccess.js requires SESSION-mode semantics (a dedicated ' +
+      'backend connection for the life of each pool client) - use the SESSION pooler ' +
+      "(port 5432) instead. See this function's own comment for why."
+    );
+  }
+}
+
 let pool;
 // ADV-002B - exported so backend/lib/sharedProjectAccess.js can reuse the
 // SAME pool/connection (same role, same TLS config, same max:5 sizing)
@@ -111,6 +156,7 @@ export function getPool() {
     if (!connectionString) {
       throw new Error('TRAFFIC_STRATEGY_MAP_DB_URL is not configured.');
     }
+    assertSessionPoolerMode(connectionString);
     pool = new pg.Pool(buildPoolConfig(connectionString));
   }
   return pool;
