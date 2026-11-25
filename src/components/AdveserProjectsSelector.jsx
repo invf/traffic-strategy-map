@@ -4,9 +4,14 @@ import { useStore } from '../store/useStore';
 import { useAuth } from '../hooks/useAuth';
 import { useTranslation } from '../i18n/useTranslation';
 import { listAdveserProjects } from '../services/adveserProjects';
+import { findStrategyByProjectId } from '../services/strategies';
 import { importLaunchStrategy } from '../services/launchStrategyImportFlow';
 
 const LAUNCH_STUDIO_URL = import.meta.env.VITE_LAUNCH_STUDIO_URL || 'https://adveser-launch-studio.onrender.com';
+
+function buildStrategyUrl(strategyId) {
+  return `${window.location.origin}${window.location.pathname}?strategy=${encodeURIComponent(strategyId)}`;
+}
 
 // ADV-003 - lists the signed-in user's shared ADVESER Projects
 // (adveser_core.projects, via GET /api/projects), clearly SEPARATE from
@@ -25,7 +30,17 @@ export default function AdveserProjectsSelector() {
   const { isAuthenticated } = useAuth();
   const t = useTranslation();
   const [open, setOpen] = useState(false);
-  const [importState, setImportState] = useState({ status: 'idle' }); // idle | loading | done | no-export | error
+  const [importState, setImportState] = useState({ status: 'idle' }); // idle | loading | done | no-export | error | unavailable | popup-blocked
+  // ADV-004-FIX-2 (final correction) - null = "not checked yet"/"none
+  // exists"; a string = the one linked strategy's real id. Drives which
+  // action is offered: a project with NO linked strategy yet only ever
+  // gets the (generating) "Import" action; a project that already HAS
+  // one only ever gets "Open" (no generation at all - just navigate to
+  // its own persisted content) plus a SEPARATE, explicit "Update from
+  // Launch Studio" action. Opening never regenerates anything merely
+  // because the user wants to look at it (the ticket's own explicit
+  // requirement) - only Import/Update ever call importLaunchStrategy.
+  const [linkedStrategyId, setLinkedStrategyId] = useState(null);
   const ref = useRef(null);
 
   useEffect(() => {
@@ -53,44 +68,90 @@ export default function AdveserProjectsSelector() {
       .catch(() => {});
   }, [open, hydrateAdveserProjects]);
 
+  const active = adveserProjects.find((p) => p.id === activeAdveserProjectId) || null;
+
+  // ADV-004-FIX-2 (final correction) - looks up whether a cloud strategy
+  // already exists for the ACTIVE project, purely to decide which
+  // action to offer. A read-only check (findStrategyByProjectId), never
+  // itself a trigger for anything - resets to "not checked yet" whenever
+  // the active project changes, so switching projects never shows a
+  // stale previous project's action set for an instant.
+  useEffect(() => {
+    setLinkedStrategyId(null);
+    setImportState({ status: 'idle' });
+    if (!open || !active) return;
+    let cancelled = false;
+    findStrategyByProjectId(active.id)
+      .then((existing) => {
+        if (!cancelled) setLinkedStrategyId(existing?.id || null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open, active?.id]);
+
   // Signed-out users have no ADVESER identity to list projects for at
   // all - same gate StrategiesModal.jsx uses for Cloud Projects. Local
   // Drafts/Quick Strategy remain fully available regardless; this
   // component simply doesn't render, exactly as if it didn't exist.
   if (!isAuthenticated) return null;
 
-  const active = adveserProjects.find((p) => p.id === activeAdveserProjectId) || null;
+  // ADV-004-FIX-2 (final correction) - OPENING an existing strategy is a
+  // pure navigation action: no network fetch of the Launch Studio export,
+  // no mapping, no reconciliation, no persistence - it never regenerates
+  // anything merely because the user wants to look at it. The new tab
+  // loads the strategy independently from persistent storage
+  // (useOpenStrategyFromUrl.js), never from this tab's state - this
+  // tab's own graph is therefore guaranteed untouched regardless of what
+  // happens in the new one.
+  const handleOpenStrategy = () => {
+    if (!linkedStrategyId) return;
+    const url = buildStrategyUrl(linkedStrategyId);
+    const newTab = window.open(url, '_blank');
+    setImportState(newTab ? { status: 'idle' } : { status: 'popup-blocked', openedUrl: url });
+  };
 
-  // ADV-004 - the one write action this selector performs: merges the
-  // active project's latest APPROVED Launch Studio strategy into the
-  // CURRENT graph (never a wholesale replace - see
-  // launchStrategyImportFlow.js/useStore.js's importStrategyGraph) and
-  // persists it to the one cloud strategy row linked to this project.
-  // Never creates/renames/deletes an ADVESER Project itself - that
-  // restriction (requirement B, this component's own header comment)
-  // is unchanged.
-  const handleImportStrategy = async () => {
+  // The one action that actually generates/persists - used for BOTH the
+  // first-ever import (no linkedStrategyId yet) and the explicit "Update
+  // from Launch Studio" action (linkedStrategyId already set) - the
+  // underlying importLaunchStrategy() call already auto-detects which of
+  // the two it's doing via its own findStrategyByProjectId lookup (see
+  // that module). Never called just to OPEN an existing strategy.
+  const runImportOrUpdate = async () => {
     if (!active) return;
+    // Opened SYNCHRONOUSLY, before any await below - a browser only
+    // honors window.open as a direct result of a user gesture when
+    // called within the same synchronous call stack as the click; doing
+    // this after an await would get silently blocked even with a real
+    // click behind it. An empty target just opens about:blank, which we
+    // navigate once the import actually succeeds.
+    const newTab = window.open('', '_blank');
     setImportState({ status: 'loading' });
     try {
       const result = await importLaunchStrategy(active.id, active.name);
       if (result.status === 'no-export') {
+        if (newTab && !newTab.closed) newTab.close(); // never leave a misleading blank tab open
         setImportState({ status: 'no-export' });
-      } else {
-        // Release-readiness fix: `result.status` is 'imported' (the
-        // launchStrategyImportFlow.js contract) - spreading it AFTER the
-        // literal 'done' here silently overwrote 'done' with 'imported',
-        // a status none of the render branches below ever check, so the
-        // success summary never rendered at all after a real import.
-        // `status` must come LAST so the literal always wins.
+        return;
+      }
+      setLinkedStrategyId(result.strategyId);
+      const url = buildStrategyUrl(result.strategyId);
+      if (newTab && !newTab.closed) {
+        newTab.location.href = url;
         setImportState({ ...result, status: 'done' });
+      } else {
+        // Popup blocked despite the synchronous call (can still happen
+        // depending on browser settings) - never silently fail; a real
+        // click on an <a> always bypasses a popup blocker.
+        setImportState({ ...result, status: 'done', openedUrl: url });
       }
     } catch (err) {
-      // A 404 can only mean the backend route isn't mounted yet (feature
-      // flag off) - never a real failure shape this route's own handler
-      // produces (see getApprovedStrategyExport's own comment). Shown
-      // distinctly so the message is accurate, not a misleading "try
-      // again" for something retrying can never fix.
+      // Never leave a misleading blank tab open on failure - close it
+      // and report the error in THIS tab, where the user already has
+      // full context. The original graph was never touched either way
+      // (importLaunchStrategy never reads/writes the active canvas).
+      if (newTab && !newTab.closed) newTab.close();
       setImportState({ status: err?.status === 404 ? 'unavailable' : 'error' });
     }
   };
@@ -146,21 +207,58 @@ export default function AdveserProjectsSelector() {
           </div>
 
           {active && (
-            <button
-              type="button"
-              onClick={handleImportStrategy}
-              disabled={importState.status === 'loading'}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-semibold text-amber-300 hover:text-amber-200 border-t border-white/10 transition-colors disabled:opacity-50"
-            >
-              <Layers size={12} />
-              {importState.status === 'loading' ? t('adveser_projects_import_strategy_loading') : t('adveser_projects_import_strategy')}
-            </button>
+            linkedStrategyId ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleOpenStrategy}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-semibold text-amber-300 hover:text-amber-200 border-t border-white/10 transition-colors"
+                >
+                  <ExternalLink size={12} />
+                  {t('adveser_projects_open_strategy')}
+                </button>
+                <button
+                  type="button"
+                  onClick={runImportOrUpdate}
+                  disabled={importState.status === 'loading'}
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-semibold text-amber-300 hover:text-amber-200 border-t border-white/10 transition-colors disabled:opacity-50"
+                >
+                  <Layers size={12} />
+                  {importState.status === 'loading' ? t('adveser_projects_import_strategy_loading') : t('adveser_projects_update_from_launch_studio')}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={runImportOrUpdate}
+                disabled={importState.status === 'loading'}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-semibold text-amber-300 hover:text-amber-200 border-t border-white/10 transition-colors disabled:opacity-50"
+              >
+                <Layers size={12} />
+                {importState.status === 'loading' ? t('adveser_projects_import_strategy_loading') : t('adveser_projects_import_strategy')}
+              </button>
+            )
           )}
 
           {importState.status === 'done' && (
-            <div className="px-3 py-2 text-[10px] text-emerald-300 border-t border-white/10">
-              {importState.addedCount} {t('adveser_projects_import_added')}, {importState.updatedCount} {t('adveser_projects_import_updated')}
-              {importState.preservedCount > 0 ? `, ${importState.preservedCount} ${t('adveser_projects_import_preserved')}` : ''}
+            <div className="px-3 py-2 text-[10px] text-emerald-300 border-t border-white/10 space-y-1">
+              <div>
+                {importState.addedCount} {t('adveser_projects_import_added')}, {importState.updatedCount} {t('adveser_projects_import_updated')}
+                {importState.preservedCount > 0 ? `, ${importState.preservedCount} ${t('adveser_projects_import_preserved')}` : ''}
+              </div>
+              {importState.openedUrl && (
+                <a href={importState.openedUrl} target="_blank" rel="noopener noreferrer" className="block text-cyan-300 underline">
+                  {t('adveser_projects_popup_blocked_link')}
+                </a>
+              )}
+            </div>
+          )}
+          {importState.status === 'popup-blocked' && (
+            <div className="px-3 py-2 text-[10px] text-amber-400 border-t border-white/10 space-y-1">
+              <div>{t('adveser_projects_popup_blocked')}</div>
+              <a href={importState.openedUrl} target="_blank" rel="noopener noreferrer" className="block text-cyan-300 underline">
+                {t('adveser_projects_popup_blocked_link')}
+              </a>
             </div>
           )}
           {importState.status === 'no-export' && (

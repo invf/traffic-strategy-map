@@ -14,6 +14,7 @@ import { generateAISuggestions } from './data/mockData';
 import { useTranslation } from './i18n/useTranslation';
 import { useCloudProjectsSync } from './hooks/useCloudProjectsSync';
 import { useAdveserProjectsSync } from './hooks/useAdveserProjectsSync';
+import { useOpenStrategyFromUrl } from './hooks/useOpenStrategyFromUrl';
 
 // AUTH-003B - backend/routes/ssoRoutes.js redirects a failed sign-in
 // back here as `?sso_error=<code>`, never a raw 500 or a dead end.
@@ -44,6 +45,7 @@ export default function App() {
   const [ssoErrorCode, dismissSsoError] = useSsoErrorBanner();
   useCloudProjectsSync();
   useAdveserProjectsSync();
+  const strategyLoadState = useOpenStrategyFromUrl();
 
   useEffect(() => {
     initProjects();
@@ -65,24 +67,61 @@ export default function App() {
       )}
       <TopBar />
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left sidebar — always visible on map view */}
-        {activeView === 'map' && <LeftSidebar />}
+      {/* ADV-004-FIX-2 (final correction) - a direct `?strategy=<id>` open
+          (the new tab this app's own import flow opens, or a reload of
+          it) blocks the normal UI until it resolves, so the user never
+          sees a flash of the default/empty canvas before the real
+          content loads - loading/unauthorized/not-found/error are each
+          shown distinctly, never collapsed into a silent fallback. Once
+          'ready' (or when there was no ?strategy= param at all, 'idle'),
+          the app renders completely normally - the loaded strategy is
+          already on the canvas via the hook's own loadStrategy() call. */}
+      {strategyLoadState !== 'idle' && strategyLoadState !== 'ready' ? (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="max-w-sm text-center space-y-2 px-6">
+            {strategyLoadState === 'loading' && (
+              <p className="text-sm text-slate-300">{t('open_strategy_loading')}</p>
+            )}
+            {strategyLoadState === 'unauthorized' && (
+              <>
+                <p className="text-sm text-slate-200 font-medium">{t('open_strategy_unauthorized_title')}</p>
+                <p className="text-xs text-slate-400">{t('open_strategy_unauthorized_body')}</p>
+              </>
+            )}
+            {strategyLoadState === 'not-found' && (
+              <>
+                <p className="text-sm text-slate-200 font-medium">{t('open_strategy_not_found_title')}</p>
+                <p className="text-xs text-slate-400">{t('open_strategy_not_found_body')}</p>
+              </>
+            )}
+            {strategyLoadState === 'error' && (
+              <>
+                <p className="text-sm text-slate-200 font-medium">{t('open_strategy_error_title')}</p>
+                <p className="text-xs text-slate-400">{t('open_strategy_error_body')}</p>
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left sidebar — always visible on map view */}
+          {activeView === 'map' && <LeftSidebar />}
 
-        {/* Main content area — flex-col so children can use flex-1 + overflow */}
-        <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          {activeView === 'map' && (
-            <ReactFlowProvider>
-              <MapCanvas />
-            </ReactFlowProvider>
-          )}
-          {activeView === 'traffic' && <TrafficResearch />}
-          {activeView === 'ai' && <AIAssistant />}
-        </main>
+          {/* Main content area — flex-col so children can use flex-1 + overflow */}
+          <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
+            {activeView === 'map' && (
+              <ReactFlowProvider>
+                <MapCanvas />
+              </ReactFlowProvider>
+            )}
+            {activeView === 'traffic' && <TrafficResearch />}
+            {activeView === 'ai' && <AIAssistant />}
+          </main>
 
-        {/* Right panel — only on map view */}
-        {activeView === 'map' && <RightPanel />}
-      </div>
+          {/* Right panel — only on map view */}
+          {activeView === 'map' && <RightPanel />}
+        </div>
+      )}
 
       {/* Product setup modal */}
       {showSetup && <ProductSetupModal />}

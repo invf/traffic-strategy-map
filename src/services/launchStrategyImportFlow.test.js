@@ -191,26 +191,47 @@ describe('importLaunchStrategy', () => {
     expect(result.strategyId).toBe('existing-strategy-id');
   });
 
-  it('after a successful import, the store\'s active cloud project points at the imported/updated strategy', async () => {
+  // ===== ADV-004-FIX-2 (final correction): "the original tab and its
+  // currently open graph must remain completely unchanged" - NEVER, not
+  // even on a successful import. Display now happens in a NEW browser
+  // tab (AdveserProjectsSelector.jsx), which loads the strategy
+  // independently from persistent storage (useOpenStrategyFromUrl.js) -
+  // this function itself must never touch the active canvas at all,
+  // success or failure. (Superseded a now-obsolete pair of tests that
+  // asserted the OPPOSITE under the earlier, same-tab-auto-display
+  // design this correction replaces.) =====
+  it('never touches the active canvas (nodes/edges/activeProjectId/activeProjectSource) even on a fully successful FIRST import', async () => {
+    const before = { nodes: [], edges: [], activeProjectId: 'whatever-was-already-active', activeProjectSource: 'local' };
+    useStore.setState(before);
+
     getApprovedStrategyExport.mockResolvedValue({ id: 'export-1', strategyDecisionPackage: PKG });
     findStrategyByProjectId.mockResolvedValue(null);
     createStrategy.mockResolvedValue({ id: 'new-strategy-id', updatedAt: '2026-01-02T00:00:00.000Z' });
 
-    await importLaunchStrategy('proj-1', 'My Project');
+    const result = await importLaunchStrategy('proj-1', 'My Project');
 
-    expect(useStore.getState().activeProjectId).toBe('new-strategy-id');
-    expect(useStore.getState().activeProjectSource).toBe('cloud');
+    expect(result.strategyId).toBe('new-strategy-id'); // the caller DOES get the new id (to navigate a new tab to)
+    expect(useStore.getState().nodes).toEqual([]);
+    expect(useStore.getState().edges).toEqual([]);
+    expect(useStore.getState().activeProjectId).toBe('whatever-was-already-active');
+    expect(useStore.getState().activeProjectSource).toBe('local');
   });
 
-  it('the canvas is only replaced AFTER persistence succeeds, and reflects the real persisted content', async () => {
-    getApprovedStrategyExport.mockResolvedValue({ id: 'export-1', strategyDecisionPackage: PKG });
-    findStrategyByProjectId.mockResolvedValue(null);
-    createStrategy.mockResolvedValue({ id: 'new-strategy-id', updatedAt: '2026-01-02T00:00:00.000Z' });
+  it('never touches the active canvas even on a fully successful RE-import/update', async () => {
+    const before = { nodes: [], edges: [], activeProjectId: 'whatever-was-already-active', activeProjectSource: 'local' };
+    useStore.setState(before);
 
-    await importLaunchStrategy('proj-1', 'My Project');
+    getApprovedStrategyExport.mockResolvedValue({ id: 'export-2', strategyDecisionPackage: PKG });
+    findStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-id' });
+    getStrategy.mockResolvedValue({ id: 'existing-strategy-id', nodes: [], edges: [], productInfo: {}, aiSuggestions: null });
+    updateStrategy.mockResolvedValue({ id: 'existing-strategy-id', updatedAt: '2026-01-03T00:00:00.000Z' });
 
-    expect(useStore.getState().nodes).toHaveLength(1);
-    expect(useStore.getState().nodes[0].data.sourceDecisionRef.decisionId).toBe('obj-0');
+    const result = await importLaunchStrategy('proj-1', 'My Project');
+
+    expect(result.strategyId).toBe('existing-strategy-id');
+    expect(useStore.getState().nodes).toEqual([]);
+    expect(useStore.getState().activeProjectId).toBe('whatever-was-already-active');
+    expect(useStore.getState().activeProjectSource).toBe('local');
   });
 
   // ===== Scenario 6: a persistence failure never contaminates (or even touches) the active graph =====

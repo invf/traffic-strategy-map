@@ -22,6 +22,10 @@ vi.mock('../i18n/useTranslation', () => ({
     adveser_projects_import_added: 'added',
     adveser_projects_import_updated: 'updated',
     adveser_projects_import_preserved: 'of your edits preserved',
+    adveser_projects_open_strategy: 'Open strategy',
+    adveser_projects_update_from_launch_studio: 'Update from Launch Studio',
+    adveser_projects_popup_blocked: 'Your browser blocked the new tab.',
+    adveser_projects_popup_blocked_link: 'Click here to open the strategy',
   }[key] || key),
 }));
 
@@ -41,6 +45,14 @@ vi.mock('../store/useStore', () => ({ useStore: () => storeState }));
 const mockListAdveserProjects = vi.fn().mockResolvedValue([]);
 vi.mock('../services/adveserProjects', () => ({ listAdveserProjects: (...args) => mockListAdveserProjects(...args) }));
 
+// ADV-004-FIX-2 (final correction): the selector now looks up whether a
+// cloud strategy already exists for the active project - defaults to
+// "none yet" so every pre-existing test (written before this lookup
+// existed) keeps exercising the "Import" (not "Open"/"Update") action,
+// unless a test explicitly overrides it.
+const mockFindStrategyByProjectId = vi.fn().mockResolvedValue(null);
+vi.mock('../services/strategies', () => ({ findStrategyByProjectId: (...args) => mockFindStrategyByProjectId(...args) }));
+
 // ADV-004 release-readiness fix: a 404 (backend feature flag off) must
 // render a distinct, accurate "not available yet" message, never the
 // generic "could not import, try again" one implying a retry might help.
@@ -59,11 +71,21 @@ function baseStore(overrides = {}) {
   };
 }
 
+// ADV-004-FIX-2 (final correction): opening/updating a strategy opens a
+// real browser tab - mocked so no test touches a real window, and so
+// call order/timing (synchronous, before any await - required for
+// popup blockers to allow it) and the exact navigated URL are both
+// assertable.
+let mockWindowOpen;
+
 describe('AdveserProjectsSelector (ADV-003)', () => {
   beforeEach(() => {
     mockListAdveserProjects.mockReset().mockResolvedValue([]);
     hydrateAdveserProjects.mockClear();
+    mockFindStrategyByProjectId.mockReset().mockResolvedValue(null);
     mockImportLaunchStrategy.mockReset();
+    mockWindowOpen = vi.fn(() => ({ closed: false, location: { href: '' }, close: vi.fn() }));
+    vi.stubGlobal('open', mockWindowOpen);
   });
 
   it('renders nothing at all while signed out - Local Drafts/Quick Strategy are completely unaffected by its absence', () => {
@@ -118,7 +140,7 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
     expect(screen.getAllByText(/Only This One|Owner/)).toHaveLength(2);
   });
 
-  it('the "Open Launch Studio" link points at Launch Studio, carrying the active project id when one is selected', () => {
+  it('the "Open Launch Studio" link points at Launch Studio, carrying the active project id when one is selected', async () => {
     mockUseAuth.mockReturnValue({ isAuthenticated: true });
     storeState = baseStore({
       adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }],
@@ -126,6 +148,7 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
     });
     render(<AdveserProjectsSelector />);
     fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(mockFindStrategyByProjectId).toHaveBeenCalled());
 
     const link = screen.getByText('Open Launch Studio').closest('a');
     expect(link.getAttribute('href')).toContain('project=p1');
@@ -157,6 +180,142 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
     expect(hydrateAdveserProjects).not.toHaveBeenCalled();
   });
 
+  // ===== ADV-004-FIX-2 (final correction): which action is offered =====
+
+  it('with no linked strategy yet, only the generating "Import" action is offered', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue(null);
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+
+    await waitFor(() => expect(mockFindStrategyByProjectId).toHaveBeenCalledWith('p1'));
+    expect(screen.getByText('Import strategy from Launch Studio')).toBeInTheDocument();
+    expect(screen.queryByText('Open strategy')).not.toBeInTheDocument();
+    expect(screen.queryByText('Update from Launch Studio')).not.toBeInTheDocument();
+  });
+
+  it('once a strategy is already linked, "Open strategy" and "Update from Launch Studio" are offered instead of "Import"', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-1' });
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+
+    await waitFor(() => expect(screen.getByText('Open strategy')).toBeInTheDocument());
+    expect(screen.getByText('Update from Launch Studio')).toBeInTheDocument();
+    expect(screen.queryByText('Import strategy from Launch Studio')).not.toBeInTheDocument();
+  });
+
+  // ===== Scenario: existing strategy opens without unintended regeneration =====
+
+  it('"Open strategy" navigates directly to the existing strategy\'s URL and never calls importLaunchStrategy at all', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-1' });
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Open strategy')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Open strategy'));
+
+    expect(mockWindowOpen).toHaveBeenCalledTimes(1);
+    expect(mockWindowOpen.mock.calls[0][0]).toContain('strategy=existing-strategy-1');
+    expect(mockImportLaunchStrategy).not.toHaveBeenCalled(); // never regenerates merely because the user wants to look at it
+  });
+
+  // ===== Scenario: new tab receives the correct strategy id =====
+
+  it('on a successful first import, the blank tab is navigated to a URL carrying the REAL, server-assigned strategy id', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue(null);
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    mockImportLaunchStrategy.mockResolvedValue({ status: 'imported', addedCount: 8, updatedCount: 0, preservedCount: 0, strategyId: 'new-strategy-xyz' });
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Import strategy from Launch Studio')).toBeInTheDocument());
+
+    const blankTab = { closed: false, location: { href: '' }, close: vi.fn() };
+    mockWindowOpen.mockReturnValue(blankTab);
+
+    fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
+
+    // The blank tab must be opened BEFORE the import resolves (a real
+    // click handler, synchronously) - confirmed by it already existing
+    // the moment importLaunchStrategy was invoked.
+    expect(mockWindowOpen).toHaveBeenCalledWith('', '_blank');
+
+    await waitFor(() => expect(blankTab.location.href).toContain('strategy=new-strategy-xyz'));
+  });
+
+  // ===== Scenario: popup-blocked fallback =====
+
+  it('when the popup is blocked, a real clickable link to the new strategy is offered instead of silently failing', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue(null);
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    mockImportLaunchStrategy.mockResolvedValue({ status: 'imported', addedCount: 1, updatedCount: 0, preservedCount: 0, strategyId: 'new-strategy-xyz' });
+    mockWindowOpen.mockReturnValue(null); // blocked
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Import strategy from Launch Studio')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
+
+    await waitFor(() => expect(screen.getByText('Click here to open the strategy')).toBeInTheDocument());
+    const link = screen.getByText('Click here to open the strategy').closest('a');
+    expect(link.getAttribute('href')).toContain('strategy=new-strategy-xyz');
+  });
+
+  it('"Open strategy" also handles a blocked popup gracefully, with a real link to the existing strategy', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-1' });
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    mockWindowOpen.mockReturnValue(null);
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Open strategy')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Open strategy'));
+
+    await waitFor(() => expect(screen.getByText('Your browser blocked the new tab.')).toBeInTheDocument());
+    const link = screen.getByText('Click here to open the strategy').closest('a');
+    expect(link.getAttribute('href')).toContain('strategy=existing-strategy-1');
+  });
+
+  // ===== Scenario: import failure never leaves a misleading blank tab =====
+
+  it('on a genuine import failure, the blank tab is closed and the original tab shows an actionable error', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue(null);
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    const serverError = new Error('Failed (503)');
+    serverError.status = 503;
+    mockImportLaunchStrategy.mockRejectedValue(serverError);
+
+    const blankTab = { closed: false, location: { href: '' }, close: vi.fn() };
+    mockWindowOpen.mockReturnValue(blankTab);
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Import strategy from Launch Studio')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
+
+    await waitFor(() => expect(blankTab.close).toHaveBeenCalledTimes(1)); // never left open and blank
+    expect(screen.getByText('Could not import the strategy. Please try again.')).toBeInTheDocument();
+  });
+
   // ADV-004 release-readiness check: the import route is mounted only
   // when the backend's own feature flag is on (default OFF) - a 404 is
   // the unambiguous signal for "not enabled yet" (see
@@ -165,8 +324,7 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
   it('a 404 from the import flow (backend feature flag off) shows "not available yet", never the generic retry-implying error message', async () => {
     mockUseAuth.mockReturnValue({ isAuthenticated: true });
     storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
-    // Never resolves - keeps the ADV-003-FIX-4 refresh-on-open effect from
-    // racing with this test's own click and overwriting storeState mid-test.
+    mockFindStrategyByProjectId.mockResolvedValue(null);
     mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
     const notFound = new Error('Failed to read the approved strategy export (404)');
     notFound.status = 404;
@@ -174,36 +332,23 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
 
     render(<AdveserProjectsSelector />);
     fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Import strategy from Launch Studio')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
 
     await waitFor(() => expect(screen.getByText('Strategy import is not available yet.')).toBeInTheDocument());
     expect(screen.queryByText('Could not import the strategy. Please try again.')).not.toBeInTheDocument();
   });
 
-  it('a genuine (non-404) failure still shows the generic error message, unchanged from before this fix', async () => {
-    mockUseAuth.mockReturnValue({ isAuthenticated: true });
-    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
-    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
-    const serverError = new Error('Failed to read the approved strategy export (503)');
-    serverError.status = 503;
-    mockImportLaunchStrategy.mockRejectedValue(serverError);
-
-    render(<AdveserProjectsSelector />);
-    fireEvent.click(screen.getByTitle('ADVESER Projects'));
-    fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
-
-    await waitFor(() => expect(screen.getByText('Could not import the strategy. Please try again.')).toBeInTheDocument());
-    expect(screen.queryByText('Strategy import is not available yet.')).not.toBeInTheDocument();
-  });
-
   it('a successful import with no approved export yet shows the "no export" message', async () => {
     mockUseAuth.mockReturnValue({ isAuthenticated: true });
     storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue(null);
     mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
     mockImportLaunchStrategy.mockResolvedValue({ status: 'no-export' });
 
     render(<AdveserProjectsSelector />);
     fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Import strategy from Launch Studio')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
 
     await waitFor(() => expect(screen.getByText('No approved strategy yet.')).toBeInTheDocument());
@@ -212,21 +357,46 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
   it('a successful import shows the added/updated/preserved summary', async () => {
     mockUseAuth.mockReturnValue({ isAuthenticated: true });
     storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue(null);
     mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
     mockImportLaunchStrategy.mockResolvedValue({ status: 'imported', addedCount: 2, updatedCount: 1, preservedCount: 3, strategyId: 's1' });
 
     render(<AdveserProjectsSelector />);
     fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Import strategy from Launch Studio')).toBeInTheDocument());
     fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
 
     // Matched as a function (not a string/regex) because the sentence is
     // split across sibling text nodes by the interpolated {count}/{label}
     // JSX expressions - RTL's default text matcher only matches within a
-    // single node.
+    // single node. Restricted to a leaf element (no element children) so
+    // only the innermost wrapper matches, not the outer summary/link
+    // container that shares the same recursive textContent.
     await waitFor(() =>
       expect(
-        screen.getByText((_, el) => el.textContent === '2 added, 1 updated, 3 of your edits preserved')
+        screen.getByText((_, el) => el.children.length === 0 && el.textContent === '2 added, 1 updated, 3 of your edits preserved')
       ).toBeInTheDocument()
     );
+  });
+
+  // ===== Scenario: an explicit "Update from Launch Studio" regenerates, "Open" never does =====
+
+  it('"Update from Launch Studio" calls importLaunchStrategy (the ONLY action that does) and navigates to the (possibly same) strategy id', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockFindStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-1' });
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    mockImportLaunchStrategy.mockResolvedValue({ status: 'imported', addedCount: 1, updatedCount: 2, preservedCount: 1, strategyId: 'existing-strategy-1' });
+
+    const blankTab = { closed: false, location: { href: '' }, close: vi.fn() };
+    mockWindowOpen.mockReturnValue(blankTab);
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    await waitFor(() => expect(screen.getByText('Update from Launch Studio')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Update from Launch Studio'));
+
+    expect(mockImportLaunchStrategy).toHaveBeenCalledWith('p1', 'Project Alpha');
+    await waitFor(() => expect(blankTab.location.href).toContain('strategy=existing-strategy-1'));
   });
 });
