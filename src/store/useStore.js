@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { applyNodeChanges, applyEdgeChanges, addEdge } from '@xyflow/react';
 import { INITIAL_NODES, INITIAL_EDGES, NODE_TYPES_CONFIG } from '../data/mockData';
-import { mapStrategyDecisionPackageToGraph, reconcileImportedGraph } from '../utils/strategyDecisionMapping';
 
 const uid = () => `n_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 const pid = () => `proj_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -54,8 +53,9 @@ const fallbackToLocal = (s) => {
 // actionPlan.actionItems/plannedTimeframe - see mockData.js's nd() for why
 // these default to empty/null rather than undefined. A node created here
 // (by the user, via the UI) always has sourceDecisionRef: null - exactly
-// what makes it permanently exempt from importStrategyGraph's
-// reconciliation, full stop.
+// what makes it permanently exempt from reconcileImportedGraph's
+// reconciliation (src/utils/strategyDecisionMapping.js, driven by
+// launchStrategyImportFlow.js), full stop.
 const makeNodeData = (nodeType) => ({
   label: `New ${NODE_TYPES_CONFIG[nodeType]?.label || 'Node'}`,
   nodeType,
@@ -360,9 +360,10 @@ export const useStore = create(
 
       // ADV-004: any edit to an import-sourced node (one with a real
       // sourceDecisionRef) through the ordinary editing UI marks it
-      // locallyEdited - the one flag importStrategyGraph's reconciliation
-      // reads to decide "content is still import-owned" vs "never touch
-      // this again automatically." A hand-created node (sourceDecisionRef
+      // locallyEdited - the one flag reconcileImportedGraph's
+      // reconciliation (src/utils/strategyDecisionMapping.js) reads to
+      // decide "content is still import-owned" vs "never touch this
+      // again automatically." A hand-created node (sourceDecisionRef
       // null) is simply never affected by this - locallyEdited stays
       // false/irrelevant for it, since nothing ever reads it without a
       // sourceDecisionRef to match on in the first place.
@@ -586,26 +587,6 @@ export const useStore = create(
           }),
         }),
 
-      // ADV-004 - imports (or re-imports) an approved Launch Studio
-      // Strategy Decision Package into the CURRENT graph, merge-safe: a
-      // hand-created node (no sourceDecisionRef) is never touched; an
-      // import-sourced node the user has since edited (locallyEdited) is
-      // preserved as-is; everything else is added or refreshed in place.
-      // See src/utils/strategyDecisionMapping.js for the actual decision
-      // logic - this action is just the store-side wiring (never a
-      // wholesale nodes/edges replace, unlike generateMap/loadStrategy).
-      // Returns the same {updatedCount, addedCount, preservedCount}
-      // summary the caller uses for a one-line result banner.
-      importStrategyGraph: (strategyDecisionPackage, exportId) => {
-        const { nodes: mappedNodes, edges: mappedEdges } = mapStrategyDecisionPackageToGraph(strategyDecisionPackage, exportId);
-        let summary = { updatedCount: 0, addedCount: 0, preservedCount: 0 };
-        set((s) => {
-          const result = reconcileImportedGraph(s.nodes, s.edges, mappedNodes, mappedEdges);
-          summary = { updatedCount: result.updatedCount, addedCount: result.addedCount, preservedCount: result.preservedCount };
-          return { nodes: result.nodes, edges: result.edges };
-        });
-        return summary;
-      },
     }),
     {
       name: 'tsm-store-v1',

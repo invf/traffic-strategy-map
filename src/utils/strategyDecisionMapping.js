@@ -6,8 +6,10 @@
 // Pure functions only - no Zustand, no fetch - so both halves are fully
 // unit-testable without a store or a network call (same separation
 // useStore.js's own node/edge helpers already keep from the store logic
-// around them). useStore.js's importStrategyGraph action is a thin wrapper
-// calling these two functions and set()-ing the result.
+// around them). src/services/launchStrategyImportFlow.js calls these two
+// functions directly against the SPECIFIC project's own actually-
+// persisted content (never the active canvas - see that file's own
+// header for the ADV-004-FIX-2 contamination bug this fixes).
 //
 // "Primary strategist is Launch Studio" is enforced structurally here:
 // this file only ever TRANSCRIBES an already-decided package into nodes -
@@ -36,6 +38,57 @@ const ROW_Y_STEP = 160;
 
 function positionFor(nodeType, rowIndex) {
   return { x: COLUMN_X[nodeType] ?? 40, y: 40 + rowIndex * ROW_Y_STEP };
+}
+
+// ADV-004-FIX-2 - collision avoidance for newly ADDED nodes on a
+// re-import into a graph that already has real content at arbitrary,
+// user-moved positions. Deliberately simple and dependency-free (no
+// dagre/elkjs - "do not introduce a heavy new graph-layout library") -
+// this project already uses React Flow's own node/position model
+// directly; approximate bounding boxes and a deterministic downward
+// shift are enough to satisfy "avoid overlapping node bounding boxes"
+// and "support predictable repeated imports" without a real layout
+// engine. An UPDATED or PRESERVED node never goes through this - it
+// keeps its own existing (possibly user-moved) position untouched,
+// which is what "respect existing node positions and user changes"
+// actually requires; this path exists ONLY for a decision that has no
+// existing node at all yet.
+const NODE_WIDTH = 260;
+const NODE_HEIGHT = 140;
+const COLLISION_GAP = 24;
+
+function rectFor(node) {
+  return { x: node.position.x, y: node.position.y, width: NODE_WIDTH, height: NODE_HEIGHT };
+}
+
+function rectsOverlap(a, b) {
+  return (
+    a.x < b.x + b.width + COLLISION_GAP &&
+    a.x + a.width + COLLISION_GAP > b.x &&
+    a.y < b.y + b.height + COLLISION_GAP &&
+    a.y + a.height + COLLISION_GAP > b.y
+  );
+}
+
+// Walks straight down the node's own column from its default grid slot
+// until no occupied rect overlaps it - stays in the same x (preserving
+// the type-based column grouping the mapper already uses, which is also
+// this file's "avoid unnecessary edge crossings where feasible" effort:
+// same-type nodes stay visually grouped rather than scattered). Fully
+// deterministic given the same occupied set, so repeated imports against
+// an unchanged graph produce the same placement every time. Bounded to
+// 500 steps so a pathological number of occupied rects can never hang -
+// if still colliding at that point the node is placed anyway rather than
+// block the import.
+function findCollisionFreePosition(desired, occupiedRects) {
+  let candidate = { x: desired.x, y: desired.y };
+  for (let i = 0; i < 500; i += 1) {
+    const candidateRect = { x: candidate.x, y: candidate.y, width: NODE_WIDTH, height: NODE_HEIGHT };
+    const collides = occupiedRects.some((r) => rectsOverlap(candidateRect, r));
+    if (!collides) return candidate;
+    candidate = { x: candidate.x, y: candidate.y + NODE_HEIGHT + COLLISION_GAP };
+  }
+  return candidate;
 }
 
 function baseNodeData(nodeType, label, description, priority, status, exportId, decisionId, decisionType) {
@@ -197,8 +250,10 @@ function makeEdge(sourceId, targetId) {
 // ADV-004 ticket's "do not overwrite manually edited graphs during
 // re-import or regeneration":
 //
-//  1. mapped decision, no existing match          -> ADD as a new node
-//  2. mapped decision, existing match, NOT edited  -> UPDATE in place
+//  1. mapped decision, no existing match          -> ADD as a new node,
+//     collision-free (see findCollisionFreePosition above)
+//  2. mapped decision, existing match, NOT edited  -> UPDATE in place,
+//     keeping the existing node's own position untouched
 //  3. mapped decision, existing match, locallyEdited -> PRESERVE (skip)
 //  4. existing import-sourced node, no longer in the mapped set -> LEAVE
 //     IN PLACE (never auto-deleted)
@@ -229,8 +284,17 @@ export function reconcileImportedGraph(existingNodes, existingEdges, mappedNodes
     const existing = existingByDecisionId.get(decisionId);
 
     if (!existing) {
-      resultNodes.push(mapped);
-      resolvedNodeId.set(decisionId, mapped.id);
+      // Collision avoidance against EVERY node already placed so far in
+      // this reconciliation (pre-existing nodes at their own real
+      // positions, plus every earlier node this same batch already
+      // added) - never against an unrelated graph, since resultNodes
+      // only ever starts from THIS decision's own existingNodes (see
+      // launchStrategyImportFlow.js's own fix).
+      const occupiedRects = resultNodes.map(rectFor);
+      const freePosition = findCollisionFreePosition(mapped.position, occupiedRects);
+      const placedNode = freePosition === mapped.position ? mapped : { ...mapped, position: freePosition };
+      resultNodes.push(placedNode);
+      resolvedNodeId.set(decisionId, placedNode.id);
       addedCount += 1;
       continue;
     }

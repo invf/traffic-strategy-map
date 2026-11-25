@@ -595,8 +595,8 @@ export const generateAISuggestions = (productInfo) => {
 // here (never `undefined`, so the shape stays predictable). A node with
 // no sourceDecisionRef is, by construction, never eligible for the
 // Strategy Decision import/reconciliation logic to touch - see
-// src/utils/strategyDecisionMapping.js and useStore.js's
-// importStrategyGraph.
+// src/utils/strategyDecisionMapping.js and
+// src/services/launchStrategyImportFlow.js.
 const nd = (nodeType, label, extraData = {}) => ({
   label,
   nodeType,

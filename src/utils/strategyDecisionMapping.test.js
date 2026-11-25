@@ -241,4 +241,77 @@ describe('reconcileImportedGraph', () => {
     const matchingEdges = result.edges.filter((e) => e.source === existingObj.id && e.target === existingChannel.id);
     expect(matchingEdges).toHaveLength(1);
   });
+
+  // ===== ADV-004-FIX-2 scenario 4: node collision prevention =====
+
+  it('a newly ADDED node is nudged away from an existing (unrelated/orphaned) node occupying its default slot - no overlapping bounding boxes', () => {
+    // obj-0's default mapped position is the 'idea' column's row 0 slot
+    // (x: 40, y: 40, per positionFor) - placing an unrelated existing
+    // node exactly there forces the collision-avoidance path to fire.
+    const blocker = importedNode('some-other-decision-not-in-this-package', { label: 'Blocking node' });
+    blocker.position = { x: 40, y: 40 };
+
+    const pkg = minimalPackage({ objectives: [{ id: 'obj-0', statement: 'New objective', priority: 'high', justification: { facts: [], assumptions: [] } }] });
+    const { nodes: mappedNodes, edges: mappedEdges } = mapStrategyDecisionPackageToGraph(pkg, 'export-1');
+    expect(mappedNodes[0].position).toEqual({ x: 40, y: 40 }); // confirms the test actually exercises a real collision, not a no-op
+
+    const result = reconcileImportedGraph([blocker], [], mappedNodes, mappedEdges);
+    const newNode = result.nodes.find((n) => n.data.sourceDecisionRef?.decisionId === 'obj-0');
+
+    expect(newNode.position).not.toEqual({ x: 40, y: 40 }); // moved away from the blocker
+    expect(newNode.position.x).toBe(40); // same column - type grouping/edge-crossing avoidance is preserved
+    expect(newNode.position.y).toBeGreaterThan(40); // nudged downward, deterministically
+    expect(result.nodes.find((n) => n.id === blocker.id).position).toEqual({ x: 40, y: 40 }); // the existing node itself is never moved
+  });
+
+  it('a newly ADDED node is also nudged away from a fully HAND-CREATED node (no sourceDecisionRef at all) occupying its default slot', () => {
+    const hand = handCreatedNode('hand-blocker');
+    hand.position = { x: 40, y: 40 };
+
+    const pkg = minimalPackage({ objectives: [{ id: 'obj-0', statement: 'New objective', priority: 'high', justification: { facts: [], assumptions: [] } }] });
+    const { nodes: mappedNodes, edges: mappedEdges } = mapStrategyDecisionPackageToGraph(pkg, 'export-1');
+
+    const result = reconcileImportedGraph([hand], [], mappedNodes, mappedEdges);
+    const newNode = result.nodes.find((n) => n.data.sourceDecisionRef?.decisionId === 'obj-0');
+
+    expect(newNode.position).not.toEqual({ x: 40, y: 40 });
+    expect(result.nodes.find((n) => n.id === 'hand-blocker').position).toEqual({ x: 40, y: 40 }); // never moved
+  });
+
+  it('two newly ADDED nodes landing in the same column never overlap each other either', () => {
+    const pkg = minimalPackage({
+      objectives: [
+        { id: 'obj-0', statement: 'First', priority: 'high', justification: { facts: [], assumptions: [] } },
+        { id: 'obj-1', statement: 'Second', priority: 'high', justification: { facts: [], assumptions: [] } },
+      ],
+    });
+    const { nodes: mappedNodes, edges: mappedEdges } = mapStrategyDecisionPackageToGraph(pkg, 'export-1');
+    // Force both onto the exact same default slot to prove the batch-internal collision check works, not just against pre-existing nodes.
+    mappedNodes[1].position = { ...mappedNodes[0].position };
+
+    const result = reconcileImportedGraph([], [], mappedNodes, mappedEdges);
+    const first = result.nodes.find((n) => n.data.sourceDecisionRef.decisionId === 'obj-0');
+    const second = result.nodes.find((n) => n.data.sourceDecisionRef.decisionId === 'obj-1');
+    expect(first.position).not.toEqual(second.position);
+  });
+
+  it('collision avoidance is fully deterministic - the same existing graph produces the same new position on repeated (separate) calls', () => {
+    const blocker = importedNode('unrelated-decision');
+    blocker.position = { x: 40, y: 40 };
+    const pkg = minimalPackage({ objectives: [{ id: 'obj-0', statement: 'X', priority: 'high', justification: { facts: [], assumptions: [] } }] });
+
+    const run = () => {
+      const { nodes: mappedNodes, edges: mappedEdges } = mapStrategyDecisionPackageToGraph(pkg, 'export-1');
+      return reconcileImportedGraph([blocker], [], mappedNodes, mappedEdges).nodes.find((n) => n.data.sourceDecisionRef?.decisionId === 'obj-0').position;
+    };
+
+    expect(run()).toEqual(run());
+  });
+
+  it('a normal import with no pre-existing occupant at all keeps the original clean grid position unchanged (no unnecessary nudging)', () => {
+    const pkg = minimalPackage({ objectives: [{ id: 'obj-0', statement: 'X', priority: 'high', justification: { facts: [], assumptions: [] } }] });
+    const { nodes: mappedNodes, edges: mappedEdges } = mapStrategyDecisionPackageToGraph(pkg, 'export-1');
+    const result = reconcileImportedGraph([], [], mappedNodes, mappedEdges);
+    expect(result.nodes[0].position).toEqual({ x: 40, y: 40 });
+  });
 });
