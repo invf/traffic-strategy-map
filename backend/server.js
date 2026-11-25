@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { createSsoRouter, ensureValidAccessToken } from './routes/ssoRoutes.js';
 import { createStrategiesRouter } from './routes/strategiesProxy.js';
 import { createProjectsRouter } from './routes/projectsProxy.js';
+import { createLaunchStrategyImportRouter } from './routes/launchStrategyImportProxy.js';
 import { requireSsoAuth } from './middleware/requireSsoAuth.js';
 import { createRequireEntitlement } from './middleware/requireEntitlement.js';
 import { createRequireProductEntitlement } from './middleware/requireProductEntitlement.js';
@@ -124,6 +125,25 @@ if (sharedProjectsEnabled && strategiesProxyConfigured) {
   console.log('[server] /api/projects is disabled (TRAFFIC_STRATEGY_MAP_SHARED_PROJECTS_ENABLED is not "true") - default OFF, per ADV-002B.');
 }
 
+// ADV-004 - new, OFF-by-default feature flag, same reasoning as
+// sharedProjectsEnabled above: this reads launch_studio.approved_analysis_exports,
+// infrastructure that has not been applied to Production yet (Launch
+// Studio's own 0007/0008/0009 migrations, and this repo's own
+// 20261125090300_grant_tsm_launch_export_read.sql) - a deliberate,
+// explicit opt-in, never implied by sharedProjectsEnabled already being
+// on for the unrelated project-listing feature.
+const launchStrategyImportEnabled = process.env.TRAFFIC_STRATEGY_MAP_STRATEGY_IMPORT_ENABLED === 'true';
+
+let launchStrategyImportRouter;
+if (launchStrategyImportEnabled && strategiesProxyConfigured) {
+  launchStrategyImportRouter = createLaunchStrategyImportRouter({ withSharedProjectTransaction });
+  console.log('[server] /api/projects/:projectId/approved-strategy-export is active - feature flag ON.');
+} else if (launchStrategyImportEnabled) {
+  console.warn('[server] TRAFFIC_STRATEGY_MAP_STRATEGY_IMPORT_ENABLED=true but the underlying SSO/entitlement/DB config is incomplete - the Launch Studio strategy import route is NOT mounted.');
+} else {
+  console.log('[server] Launch Studio strategy import is disabled (TRAFFIC_STRATEGY_MAP_STRATEGY_IMPORT_ENABLED is not "true") - default OFF, per ADV-004.');
+}
+
 const app = createApp({
   requireAuth,
   requireEntitlement,
@@ -135,6 +155,7 @@ const app = createApp({
   requireProductEntitlement,
   strategiesRouter,
   projectsRouter,
+  launchStrategyImportRouter,
 });
 
 const PORT = process.env.PORT || 3001;

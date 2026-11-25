@@ -8,7 +8,7 @@
 import express from 'express';
 import cors from 'cors';
 
-export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetchImpl = fetch, recordUsage, frontendUrl = '*', ssoRouter, requireSsoAuth, requireProductEntitlement, strategiesRouter, projectsRouter }) {
+export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetchImpl = fetch, recordUsage, frontendUrl = '*', ssoRouter, requireSsoAuth, requireProductEntitlement, strategiesRouter, projectsRouter, launchStrategyImportRouter }) {
   const app = express();
 
   // AUTH-003B: credentials: true is required for the cross-origin SSO
@@ -95,6 +95,17 @@ export function createApp({ requireAuth, requireEntitlement, openaiApiKey, fetch
   // as every other conditionally-mounted route in this file.
   if (projectsRouter && requireSsoAuth && requireProductEntitlement) {
     app.use(requireSsoAuth, requireProductEntitlement, projectsRouter);
+  }
+
+  // ADV-004 - same mount shape as projectsRouter immediately above
+  // (identity then entitlement, both reused as-is). Only present when its
+  // own feature flag + full SSO/entitlement config is on (see server.js) -
+  // this is brand-new, still-unreviewed-by-product capability sitting on
+  // top of infrastructure (strategy_decision_package) that has not been
+  // applied to Production yet, so it gets its OWN explicit opt-in flag,
+  // never implied by sharedProjectsEnabled already being on.
+  if (launchStrategyImportRouter && requireSsoAuth && requireProductEntitlement) {
+    app.use(requireSsoAuth, requireProductEntitlement, launchStrategyImportRouter);
   }
 
   app.post('/api/openai', requireAuth, requireEntitlement, async (req, res) => {

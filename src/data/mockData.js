@@ -588,6 +588,15 @@ export const generateAISuggestions = (productInfo) => {
 };
 
 // ─── Initial map nodes ────────────────────────────────────────────────────────
+// ADV-004: dependencies/sourceDecisionRef/locallyEdited and
+// actionPlan.actionItems/plannedTimeframe are new, optional fields - every
+// hand-created node (including every INITIAL_NODES entry below) simply
+// gets the empty/null default, exactly like every other optional field
+// here (never `undefined`, so the shape stays predictable). A node with
+// no sourceDecisionRef is, by construction, never eligible for the
+// Strategy Decision import/reconciliation logic to touch - see
+// src/utils/strategyDecisionMapping.js and useStore.js's
+// importStrategyGraph.
 const nd = (nodeType, label, extraData = {}) => ({
   label,
   nodeType,
@@ -596,8 +605,11 @@ const nd = (nodeType, label, extraData = {}) => ({
   color: NODE_TYPES_CONFIG[nodeType]?.color,
   description: '',
   context: { why: '', product: '', audience: '', expectedResult: '' },
-  actionPlan: { todo: '', tools: '', kpi: '', deadline: '', executionStatus: 'pending' },
+  actionPlan: { todo: '', tools: '', kpi: '', deadline: '', executionStatus: 'pending', actionItems: [], plannedTimeframe: null },
   comments: [],
+  dependencies: [],
+  sourceDecisionRef: null,
+  locallyEdited: false,
   ...extraData,
 });
 

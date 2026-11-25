@@ -107,12 +107,30 @@ export function createStrategiesRouter(deps = {}) {
   // is_demo = true OR user_id = auth.uid(), resolved from the real
   // access token this request carries. A client-supplied filter could
   // only ever narrow that set further, never widen it.
+  // ADV-004: an optional `?project_id=<uuid>` filter, added as a SECOND
+  // PostgREST query-string filter (ANDed, same mechanism the PATCH
+  // route's `expected_updated_at` already uses) - ONLY when present does
+  // the select ALSO request project_id/source_launch_analysis_id. This
+  // keeps the DEFAULT, already-shipped list call (no project_id param)
+  // byte-identical to before this change: those two columns do not exist
+  // on Production's public.strategies yet (the migration adding them is
+  // still unapplied), so requesting them unconditionally would break the
+  // list endpoint for every caller the moment this code ships, well
+  // before the DB migration is ever applied. The project_id-filtered path
+  // is only ever exercised by the Launch Studio import flow, itself
+  // gated behind its own default-off feature flag - nothing reaches this
+  // branch until the owner has also applied the migration.
   router.get('/api/strategies', async (req, res) => {
     await withAccessToken(req, res, resolved, async (accessToken) => {
+      const { project_id } = req.query || {};
+      const query = { select: project_id ? `${LIST_COLUMNS},project_id,source_launch_analysis_id` : LIST_COLUMNS, order: 'updated_at.desc' };
+      if (project_id !== undefined) {
+        query.project_id = `eq.${project_id}`;
+      }
       const data = await postgrestRequest(resolved, accessToken, {
         method: 'GET',
         path: 'strategies',
-        query: { select: LIST_COLUMNS, order: 'updated_at.desc' },
+        query,
       });
       res.json(data);
     });
@@ -150,20 +168,30 @@ export function createStrategiesRouter(deps = {}) {
   // mismatched value at the database level regardless.
   router.post('/api/strategies', async (req, res) => {
     await withAccessToken(req, res, resolved, async (accessToken) => {
-      const { name, nodes, edges, product_info, ai_suggestions } = req.body || {};
+      // ADV-004: project_id/source_launch_analysis_id are optional - only
+      // ever sent by the "Import Strategy from Launch Studio" flow
+      // (useAdveserProjectsSync's sibling, src/hooks/useLaunchStrategyImport.js),
+      // which is itself gated behind its own feature flag and the
+      // not-yet-applied TSM migrations that add these columns. Every
+      // existing caller (plain create/Save as New) simply omits both,
+      // byte-identical to before this change.
+      const { name, nodes, edges, product_info, ai_suggestions, project_id, source_launch_analysis_id } = req.body || {};
+      const body = {
+        name,
+        nodes,
+        edges,
+        product_info,
+        ai_suggestions,
+        user_id: req.userId,
+        is_demo: false,
+        updated_at: new Date().toISOString(),
+      };
+      if (project_id !== undefined) body.project_id = project_id;
+      if (source_launch_analysis_id !== undefined) body.source_launch_analysis_id = source_launch_analysis_id;
       const data = await postgrestRequest(resolved, accessToken, {
         method: 'POST',
         path: 'strategies',
-        body: {
-          name,
-          nodes,
-          edges,
-          product_info,
-          ai_suggestions,
-          user_id: req.userId,
-          is_demo: false,
-          updated_at: new Date().toISOString(),
-        },
+        body,
         extraHeaders: { Prefer: 'return=representation' },
       });
       res.status(201).json(Array.isArray(data) ? data[0] : data);
@@ -185,13 +213,20 @@ export function createStrategiesRouter(deps = {}) {
   // unaffected.
   router.patch('/api/strategies/:id', async (req, res) => {
     await withAccessToken(req, res, resolved, async (accessToken) => {
-      const { name, nodes, edges, product_info, ai_suggestions, expected_updated_at } = req.body || {};
+      const { name, nodes, edges, product_info, ai_suggestions, expected_updated_at, project_id, source_launch_analysis_id } = req.body || {};
       const body = { updated_at: new Date().toISOString() };
       if (name !== undefined) body.name = name;
       if (nodes !== undefined) body.nodes = nodes;
       if (edges !== undefined) body.edges = edges;
       if (product_info !== undefined) body.product_info = product_info;
       if (ai_suggestions !== undefined) body.ai_suggestions = ai_suggestions;
+      // ADV-004 - see the POST route's own comment above; re-pointing an
+      // existing strategy at a NEWER export (re-import) updates this
+      // column on the SAME row rather than creating a second one, which
+      // is exactly what the one-row-per-project idempotency model
+      // (this repo's own 20261125090200_... migration) expects.
+      if (project_id !== undefined) body.project_id = project_id;
+      if (source_launch_analysis_id !== undefined) body.source_launch_analysis_id = source_launch_analysis_id;
 
       const query = { id: `eq.${req.params.id}` };
       if (expected_updated_at !== undefined) {

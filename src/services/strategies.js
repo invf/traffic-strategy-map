@@ -49,16 +49,32 @@ export async function listStrategies() {
   return (data || []).map(toCamelStrategy);
 }
 
+// ADV-004 - finds the ONE existing cloud strategy already linked to this
+// ADVESER project (the one-row-per-project idempotency model - see
+// backend/routes/strategiesProxy.js's own comment on the project_id
+// filter), so a re-import updates it in place instead of creating a
+// second row. Returns null when none exists yet (first import).
+export async function findStrategyByProjectId(projectId) {
+  const res = await apiFetch(`/api/strategies?project_id=${encodeURIComponent(projectId)}`);
+  const data = await parseOrThrow(res);
+  const rows = (data || []).map(toCamelStrategy);
+  return rows[0] || null;
+}
+
 export async function getStrategy(id) {
   const res = await apiFetch(`/api/strategies/${id}`);
   return toCamelStrategy(await parseOrThrow(res));
 }
 
-export async function createStrategy({ name, nodes, edges, productInfo, aiSuggestions }) {
-  const res = await apiFetch('/api/strategies', {
-    method: 'POST',
-    body: JSON.stringify({ name, nodes, edges, product_info: productInfo, ai_suggestions: aiSuggestions }),
-  });
+// ADV-004: projectId/sourceLaunchAnalysisId are optional - only ever sent
+// by the "Import Strategy from Launch Studio" flow
+// (src/hooks/useLaunchStrategyImport.js). Every existing caller omits
+// both, byte-identical to before this change.
+export async function createStrategy({ name, nodes, edges, productInfo, aiSuggestions, projectId, sourceLaunchAnalysisId }) {
+  const body = { name, nodes, edges, product_info: productInfo, ai_suggestions: aiSuggestions };
+  if (projectId !== undefined) body.project_id = projectId;
+  if (sourceLaunchAnalysisId !== undefined) body.source_launch_analysis_id = sourceLaunchAnalysisId;
+  const res = await apiFetch('/api/strategies', { method: 'POST', body: JSON.stringify(body) });
   return toCamelStrategy(await parseOrThrow(res));
 }
 
@@ -68,7 +84,7 @@ export async function createStrategy({ name, nodes, edges, productInfo, aiSugges
 // StrategiesApiError with status 409 and `.data.current` (the server's
 // latest row, already camelCased) if it no longer matches - never a
 // silent overwrite of another browser's change.
-export async function updateStrategy(id, { name, nodes, edges, productInfo, aiSuggestions, expectedUpdatedAt } = {}) {
+export async function updateStrategy(id, { name, nodes, edges, productInfo, aiSuggestions, expectedUpdatedAt, projectId, sourceLaunchAnalysisId } = {}) {
   const body = {};
   if (name !== undefined) body.name = name;
   if (nodes !== undefined) body.nodes = nodes;
@@ -76,6 +92,11 @@ export async function updateStrategy(id, { name, nodes, edges, productInfo, aiSu
   if (productInfo !== undefined) body.product_info = productInfo;
   if (aiSuggestions !== undefined) body.ai_suggestions = aiSuggestions;
   if (expectedUpdatedAt !== undefined) body.expected_updated_at = expectedUpdatedAt;
+  // ADV-004 - re-pointing an existing strategy at a NEWER export on
+  // re-import updates this column on the SAME row, matching the one-row-
+  // per-project idempotency model (this repo's own migrations).
+  if (projectId !== undefined) body.project_id = projectId;
+  if (sourceLaunchAnalysisId !== undefined) body.source_launch_analysis_id = sourceLaunchAnalysisId;
   try {
     const res = await apiFetch(`/api/strategies/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
     return toCamelStrategy(await parseOrThrow(res));

@@ -193,6 +193,35 @@ async function run() {
     assert(res.status === 404, 'projectsRouter alone, without the real auth/entitlement middlewares also configured, never gets mounted unprotected');
   }
 
+  // ===== ADV-004: launchStrategyImportRouter is "absent, not silently
+  // degraded" - same discipline as projectsRouter immediately above =====
+  {
+    const app = createApp({ requireAuth: alwaysAuth(), requireEntitlement: alwaysEntitled() });
+    const res = await request(app).get('/api/projects/11111111-1111-1111-1111-111111111111/approved-strategy-export');
+    assert(res.status === 404, 'With no launchStrategyImportRouter supplied at all (feature flag off in server.js), the route does not exist');
+  }
+  {
+    const fakeRequireSsoAuth = (req, _res, next) => { req.userId = 'user-h'; next(); };
+    const fakeRequireProductEntitlement = (_req, _res, next) => next();
+    let reached = false;
+    const fakeLaunchStrategyImportRouter = (req, res) => { reached = true; res.json({ export: null }); };
+    const app = createApp({
+      requireAuth: alwaysAuth(),
+      requireEntitlement: alwaysEntitled(),
+      requireSsoAuth: fakeRequireSsoAuth,
+      requireProductEntitlement: fakeRequireProductEntitlement,
+      launchStrategyImportRouter: fakeLaunchStrategyImportRouter,
+    });
+    const res = await request(app).get('/api/projects/11111111-1111-1111-1111-111111111111/approved-strategy-export');
+    assert(reached && res.status === 200, 'With launchStrategyImportRouter (and requireSsoAuth/requireProductEntitlement) supplied, the route IS reachable, through the same two middlewares');
+  }
+  {
+    const fakeLaunchStrategyImportRouter = (_req, res) => res.json({ export: null });
+    const app = createApp({ requireAuth: alwaysAuth(), requireEntitlement: alwaysEntitled(), launchStrategyImportRouter: fakeLaunchStrategyImportRouter });
+    const res = await request(app).get('/api/projects/11111111-1111-1111-1111-111111111111/approved-strategy-export');
+    assert(res.status === 404, 'launchStrategyImportRouter alone, without the real auth/entitlement middlewares also configured, never gets mounted unprotected');
+  }
+
   console.log(`\n=== TEST RESULTS: ${passed} PASSED, ${failed} FAILED ===`);
   if (failed > 0) process.exit(1);
 }

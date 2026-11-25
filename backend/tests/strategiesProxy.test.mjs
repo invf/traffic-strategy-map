@@ -155,7 +155,41 @@ async function run() {
     const res = await request(app).patch('/api/strategies/abc').send({ name: 'Renamed' });
     assert(res.status === 200 && res.body.name === 'Renamed', 'PATCH /api/strategies/:id updates and returns the row');
     assert(!('nodes' in captured) && !('edges' in captured), 'Fields the client did not send are never included in the PATCH body');
+    assert(!('project_id' in captured) && !('source_launch_analysis_id' in captured), 'ADV-004: omitting project_id/source_launch_analysis_id keeps the PATCH body byte-identical to before this change - no regression for any existing caller');
     assert('updated_at' in captured, 'updated_at is always refreshed on a PATCH');
+  }
+
+  // ===== POST /api/strategies - ADV-004: optional project_id/source_launch_analysis_id, only when the caller actually sends them =====
+  {
+    let captured;
+    const app = buildApp({
+      ensureValidAccessToken: async () => 'tok',
+      fetchImpl: async (url, init) => {
+        captured = JSON.parse(init.body);
+        return jsonResponse(201, [{ id: 'new-id', ...captured }]);
+      },
+    });
+    const res = await request(app)
+      .post('/api/strategies')
+      .send({ name: 'Imported Strategy', nodes: [], edges: [], project_id: 'proj-1', source_launch_analysis_id: 'export-1' });
+    assert(res.status === 201, 'POST /api/strategies with project_id/source_launch_analysis_id -> 201');
+    assert(captured.project_id === 'proj-1' && captured.source_launch_analysis_id === 'export-1', 'Both ADV-004 fields are sent through to PostgREST exactly as provided');
+  }
+
+  // ===== PATCH /api/strategies/:id - ADV-004: re-pointing an existing strategy at a NEWER export on re-import =====
+  {
+    let captured;
+    const app = buildApp({
+      ensureValidAccessToken: async () => 'tok',
+      fetchImpl: async (url, init) => {
+        captured = JSON.parse(init.body);
+        return jsonResponse(200, [{ id: 'abc', ...captured }]);
+      },
+    });
+    const res = await request(app).patch('/api/strategies/abc').send({ source_launch_analysis_id: 'export-2' });
+    assert(res.status === 200, 'PATCH /api/strategies/:id with a new source_launch_analysis_id -> 200');
+    assert(captured.source_launch_analysis_id === 'export-2', 'The SAME row is updated in place with the new export link - never a second row');
+    assert(!('project_id' in captured), 'project_id is left untouched when the caller only re-points the export link');
   }
 
   // ===== PATCH /api/strategies/:id - not found/not owned =====

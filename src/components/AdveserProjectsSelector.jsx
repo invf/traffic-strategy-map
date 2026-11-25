@@ -4,6 +4,7 @@ import { useStore } from '../store/useStore';
 import { useAuth } from '../hooks/useAuth';
 import { useTranslation } from '../i18n/useTranslation';
 import { listAdveserProjects } from '../services/adveserProjects';
+import { importLaunchStrategy } from '../services/launchStrategyImportFlow';
 
 const LAUNCH_STUDIO_URL = import.meta.env.VITE_LAUNCH_STUDIO_URL || 'https://adveser-launch-studio.onrender.com';
 
@@ -24,6 +25,7 @@ export default function AdveserProjectsSelector() {
   const { isAuthenticated } = useAuth();
   const t = useTranslation();
   const [open, setOpen] = useState(false);
+  const [importState, setImportState] = useState({ status: 'idle' }); // idle | loading | done | no-export | error
   const ref = useRef(null);
 
   useEffect(() => {
@@ -58,6 +60,29 @@ export default function AdveserProjectsSelector() {
   if (!isAuthenticated) return null;
 
   const active = adveserProjects.find((p) => p.id === activeAdveserProjectId) || null;
+
+  // ADV-004 - the one write action this selector performs: merges the
+  // active project's latest APPROVED Launch Studio strategy into the
+  // CURRENT graph (never a wholesale replace - see
+  // launchStrategyImportFlow.js/useStore.js's importStrategyGraph) and
+  // persists it to the one cloud strategy row linked to this project.
+  // Never creates/renames/deletes an ADVESER Project itself - that
+  // restriction (requirement B, this component's own header comment)
+  // is unchanged.
+  const handleImportStrategy = async () => {
+    if (!active) return;
+    setImportState({ status: 'loading' });
+    try {
+      const result = await importLaunchStrategy(active.id, active.name);
+      if (result.status === 'no-export') {
+        setImportState({ status: 'no-export' });
+      } else {
+        setImportState({ status: 'done', ...result });
+      }
+    } catch {
+      setImportState({ status: 'error' });
+    }
+  };
 
   return (
     <div className="relative" ref={ref}>
@@ -108,6 +133,31 @@ export default function AdveserProjectsSelector() {
               ))
             )}
           </div>
+
+          {active && (
+            <button
+              type="button"
+              onClick={handleImportStrategy}
+              disabled={importState.status === 'loading'}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-semibold text-amber-300 hover:text-amber-200 border-t border-white/10 transition-colors disabled:opacity-50"
+            >
+              <Layers size={12} />
+              {importState.status === 'loading' ? t('adveser_projects_import_strategy_loading') : t('adveser_projects_import_strategy')}
+            </button>
+          )}
+
+          {importState.status === 'done' && (
+            <div className="px-3 py-2 text-[10px] text-emerald-300 border-t border-white/10">
+              {importState.addedCount} {t('adveser_projects_import_added')}, {importState.updatedCount} {t('adveser_projects_import_updated')}
+              {importState.preservedCount > 0 ? `, ${importState.preservedCount} ${t('adveser_projects_import_preserved')}` : ''}
+            </div>
+          )}
+          {importState.status === 'no-export' && (
+            <div className="px-3 py-2 text-[10px] text-slate-400 border-t border-white/10">{t('adveser_projects_import_strategy_no_export')}</div>
+          )}
+          {importState.status === 'error' && (
+            <div className="px-3 py-2 text-[10px] text-red-400 border-t border-white/10">{t('adveser_projects_import_strategy_error')}</div>
+          )}
 
           <a
             href={active ? `${LAUNCH_STUDIO_URL}/?project=${encodeURIComponent(active.id)}` : LAUNCH_STUDIO_URL}
