@@ -3,8 +3,8 @@
 // directly, same convention as AccountButton.test.jsx - this file is
 // about what the selector renders/does for each state, not about the
 // store or sync-hook logic already covered in their own test files.
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 vi.mock('../i18n/useTranslation', () => ({
   useTranslation: () => (key) => ({
@@ -22,7 +22,16 @@ vi.mock('../hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 
 let storeState;
 const setActiveAdveserProject = vi.fn((id) => { storeState.activeAdveserProjectId = id; });
+const hydrateAdveserProjects = vi.fn((list) => { storeState.adveserProjects = list; });
 vi.mock('../store/useStore', () => ({ useStore: () => storeState }));
+
+// ADV-003-FIX-4: the selector now re-fetches the project list (and
+// therefore the canonical names it carries) each time the dropdown opens
+// - mocked here so every existing test keeps exercising only the already-
+// hydrated store state, exactly as before this fix, unless a test
+// explicitly asserts on this call.
+const mockListAdveserProjects = vi.fn().mockResolvedValue([]);
+vi.mock('../services/adveserProjects', () => ({ listAdveserProjects: (...args) => mockListAdveserProjects(...args) }));
 
 import AdveserProjectsSelector from './AdveserProjectsSelector';
 
@@ -31,11 +40,17 @@ function baseStore(overrides = {}) {
     adveserProjects: [],
     activeAdveserProjectId: null,
     setActiveAdveserProject,
+    hydrateAdveserProjects,
     ...overrides,
   };
 }
 
 describe('AdveserProjectsSelector (ADV-003)', () => {
+  beforeEach(() => {
+    mockListAdveserProjects.mockReset().mockResolvedValue([]);
+    hydrateAdveserProjects.mockClear();
+  });
+
   it('renders nothing at all while signed out - Local Drafts/Quick Strategy are completely unaffected by its absence', () => {
     mockUseAuth.mockReturnValue({ isAuthenticated: false });
     storeState = baseStore();
@@ -99,5 +114,31 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
 
     const link = screen.getByText('Open Launch Studio').closest('a');
     expect(link.getAttribute('href')).toContain('project=p1');
+  });
+
+  // ADV-003-FIX-4 (requirement 4: "refresh project names when appropriate")
+  it('re-fetches the project list the moment the dropdown is opened, so a name renamed elsewhere shows up without a full page reload', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Stale Cached Name', role: 'owner' }] });
+    mockListAdveserProjects.mockResolvedValue([{ id: 'p1', name: 'Renamed Elsewhere', role: 'owner' }]);
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+
+    await waitFor(() => expect(mockListAdveserProjects).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(hydrateAdveserProjects).toHaveBeenCalledWith([{ id: 'p1', name: 'Renamed Elsewhere', role: 'owner' }]));
+  });
+
+  it('a failed refresh on open leaves the previously-hydrated list showing - never an error, never a blank menu', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Still Showing', role: 'owner' }] });
+    mockListAdveserProjects.mockRejectedValue(new Error('network error'));
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+
+    await waitFor(() => expect(mockListAdveserProjects).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Still Showing')).toBeInTheDocument();
+    expect(hydrateAdveserProjects).not.toHaveBeenCalled();
   });
 });

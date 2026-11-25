@@ -3,6 +3,7 @@ import { Layers, ChevronDown, ExternalLink, AlertCircle } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { useAuth } from '../hooks/useAuth';
 import { useTranslation } from '../i18n/useTranslation';
+import { listAdveserProjects } from '../services/adveserProjects';
 
 const LAUNCH_STUDIO_URL = import.meta.env.VITE_LAUNCH_STUDIO_URL || 'https://adveser-launch-studio.onrender.com';
 
@@ -19,7 +20,7 @@ const LAUNCH_STUDIO_URL = import.meta.env.VITE_LAUNCH_STUDIO_URL || 'https://adv
 // reusing that product's own existing, already-reviewed creation flow
 // rather than building a second one here.
 export default function AdveserProjectsSelector() {
-  const { adveserProjects, activeAdveserProjectId, setActiveAdveserProject } = useStore();
+  const { adveserProjects, activeAdveserProjectId, setActiveAdveserProject, hydrateAdveserProjects } = useStore();
   const { isAuthenticated } = useAuth();
   const t = useTranslation();
   const [open, setOpen] = useState(false);
@@ -33,6 +34,22 @@ export default function AdveserProjectsSelector() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
+
+  // ADV-003-FIX-4: refresh the list - and therefore the canonical project
+  // names it carries - at the one moment a stale name would actually be
+  // seen: right when the user opens the menu to look at or pick from it.
+  // `hydrateAdveserProjects` is a wholesale replace that never touches
+  // `activeAdveserProjectId` (useStore.js), so this only ever updates
+  // name/role/membership display data - never Cloud Strategies, Local
+  // Drafts, or the active strategy graph, which this component has never
+  // touched at all. Best-effort: a failed refresh just leaves the
+  // previously-hydrated list showing, exactly as before this fix existed.
+  useEffect(() => {
+    if (!open) return;
+    listAdveserProjects()
+      .then((list) => hydrateAdveserProjects(list))
+      .catch(() => {});
+  }, [open, hydrateAdveserProjects]);
 
   // Signed-out users have no ADVESER identity to list projects for at
   // all - same gate StrategiesModal.jsx uses for Cloud Projects. Local
