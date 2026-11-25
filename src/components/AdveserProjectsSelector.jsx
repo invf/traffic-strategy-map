@@ -77,10 +77,21 @@ export default function AdveserProjectsSelector() {
       if (result.status === 'no-export') {
         setImportState({ status: 'no-export' });
       } else {
-        setImportState({ status: 'done', ...result });
+        // Release-readiness fix: `result.status` is 'imported' (the
+        // launchStrategyImportFlow.js contract) - spreading it AFTER the
+        // literal 'done' here silently overwrote 'done' with 'imported',
+        // a status none of the render branches below ever check, so the
+        // success summary never rendered at all after a real import.
+        // `status` must come LAST so the literal always wins.
+        setImportState({ ...result, status: 'done' });
       }
-    } catch {
-      setImportState({ status: 'error' });
+    } catch (err) {
+      // A 404 can only mean the backend route isn't mounted yet (feature
+      // flag off) - never a real failure shape this route's own handler
+      // produces (see getApprovedStrategyExport's own comment). Shown
+      // distinctly so the message is accurate, not a misleading "try
+      // again" for something retrying can never fix.
+      setImportState({ status: err?.status === 404 ? 'unavailable' : 'error' });
     }
   };
 
@@ -157,6 +168,9 @@ export default function AdveserProjectsSelector() {
           )}
           {importState.status === 'error' && (
             <div className="px-3 py-2 text-[10px] text-red-400 border-t border-white/10">{t('adveser_projects_import_strategy_error')}</div>
+          )}
+          {importState.status === 'unavailable' && (
+            <div className="px-3 py-2 text-[10px] text-slate-400 border-t border-white/10">{t('adveser_projects_import_strategy_unavailable')}</div>
           )}
 
           <a

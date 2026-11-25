@@ -14,6 +14,14 @@ vi.mock('../i18n/useTranslation', () => ({
     adveser_projects_open_in_launch_studio: 'Open Launch Studio',
     adveser_projects_role_owner: 'Owner',
     adveser_projects_role_collaborator: 'Collaborator',
+    adveser_projects_import_strategy: 'Import strategy from Launch Studio',
+    adveser_projects_import_strategy_loading: 'Importing…',
+    adveser_projects_import_strategy_no_export: 'No approved strategy yet.',
+    adveser_projects_import_strategy_error: 'Could not import the strategy. Please try again.',
+    adveser_projects_import_strategy_unavailable: 'Strategy import is not available yet.',
+    adveser_projects_import_added: 'added',
+    adveser_projects_import_updated: 'updated',
+    adveser_projects_import_preserved: 'of your edits preserved',
   }[key] || key),
 }));
 
@@ -33,6 +41,12 @@ vi.mock('../store/useStore', () => ({ useStore: () => storeState }));
 const mockListAdveserProjects = vi.fn().mockResolvedValue([]);
 vi.mock('../services/adveserProjects', () => ({ listAdveserProjects: (...args) => mockListAdveserProjects(...args) }));
 
+// ADV-004 release-readiness fix: a 404 (backend feature flag off) must
+// render a distinct, accurate "not available yet" message, never the
+// generic "could not import, try again" one implying a retry might help.
+const mockImportLaunchStrategy = vi.fn();
+vi.mock('../services/launchStrategyImportFlow', () => ({ importLaunchStrategy: (...args) => mockImportLaunchStrategy(...args) }));
+
 import AdveserProjectsSelector from './AdveserProjectsSelector';
 
 function baseStore(overrides = {}) {
@@ -49,6 +63,7 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
   beforeEach(() => {
     mockListAdveserProjects.mockReset().mockResolvedValue([]);
     hydrateAdveserProjects.mockClear();
+    mockImportLaunchStrategy.mockReset();
   });
 
   it('renders nothing at all while signed out - Local Drafts/Quick Strategy are completely unaffected by its absence', () => {
@@ -140,5 +155,78 @@ describe('AdveserProjectsSelector (ADV-003)', () => {
     await waitFor(() => expect(mockListAdveserProjects).toHaveBeenCalledTimes(1));
     expect(screen.getByText('Still Showing')).toBeInTheDocument();
     expect(hydrateAdveserProjects).not.toHaveBeenCalled();
+  });
+
+  // ADV-004 release-readiness check: the import route is mounted only
+  // when the backend's own feature flag is on (default OFF) - a 404 is
+  // the unambiguous signal for "not enabled yet" (see
+  // launchStrategyImport.js's own comment), and must render distinctly
+  // from a genuine error.
+  it('a 404 from the import flow (backend feature flag off) shows "not available yet", never the generic retry-implying error message', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    // Never resolves - keeps the ADV-003-FIX-4 refresh-on-open effect from
+    // racing with this test's own click and overwriting storeState mid-test.
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    const notFound = new Error('Failed to read the approved strategy export (404)');
+    notFound.status = 404;
+    mockImportLaunchStrategy.mockRejectedValue(notFound);
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
+
+    await waitFor(() => expect(screen.getByText('Strategy import is not available yet.')).toBeInTheDocument());
+    expect(screen.queryByText('Could not import the strategy. Please try again.')).not.toBeInTheDocument();
+  });
+
+  it('a genuine (non-404) failure still shows the generic error message, unchanged from before this fix', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    const serverError = new Error('Failed to read the approved strategy export (503)');
+    serverError.status = 503;
+    mockImportLaunchStrategy.mockRejectedValue(serverError);
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
+
+    await waitFor(() => expect(screen.getByText('Could not import the strategy. Please try again.')).toBeInTheDocument());
+    expect(screen.queryByText('Strategy import is not available yet.')).not.toBeInTheDocument();
+  });
+
+  it('a successful import with no approved export yet shows the "no export" message', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    mockImportLaunchStrategy.mockResolvedValue({ status: 'no-export' });
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
+
+    await waitFor(() => expect(screen.getByText('No approved strategy yet.')).toBeInTheDocument());
+  });
+
+  it('a successful import shows the added/updated/preserved summary', async () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: true });
+    storeState = baseStore({ adveserProjects: [{ id: 'p1', name: 'Project Alpha', role: 'owner' }], activeAdveserProjectId: 'p1' });
+    mockListAdveserProjects.mockImplementation(() => new Promise(() => {}));
+    mockImportLaunchStrategy.mockResolvedValue({ status: 'imported', addedCount: 2, updatedCount: 1, preservedCount: 3, strategyId: 's1' });
+
+    render(<AdveserProjectsSelector />);
+    fireEvent.click(screen.getByTitle('ADVESER Projects'));
+    fireEvent.click(screen.getByText('Import strategy from Launch Studio'));
+
+    // Matched as a function (not a string/regex) because the sentence is
+    // split across sibling text nodes by the interpolated {count}/{label}
+    // JSX expressions - RTL's default text matcher only matches within a
+    // single node.
+    await waitFor(() =>
+      expect(
+        screen.getByText((_, el) => el.textContent === '2 added, 1 updated, 3 of your edits preserved')
+      ).toBeInTheDocument()
+    );
   });
 });
