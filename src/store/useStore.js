@@ -595,6 +595,17 @@ export const useStore = create(
       // a cloud strategy updates the canvas but not the active project
       // identity"). `id` omitted keeps this a Local Draft load (used
       // nowhere today, but kept harmless rather than assumed unreachable).
+      //
+      // ADV-004-FIX-3 (Final Async Save Identity Guard) - also resets
+      // cloudSaveStatus/cloudSaveConflict unconditionally. Without this,
+      // a conflict surfaced while editing strategy A (cloudSaveConflict =
+      // A's server row) would keep showing - and remain clickable via
+      // "Reload Latest" - after the user switches to strategy B, and
+      // resolving it would call loadStrategy(A's row) and corrupt B's
+      // canvas with A's content. Every entry point that changes which
+      // strategy is active (ProjectSwitcher, StrategiesModal's Load,
+      // useOpenStrategyFromUrl, the import flow) goes through this one
+      // action, so clearing it here closes that hole everywhere at once.
       loadStrategy: ({ id, nodes, edges, productInfo, aiSuggestions, updatedAt }) =>
         set({
           nodes: nodes || [],
@@ -613,6 +624,8 @@ export const useStore = create(
             productInfo: productInfo || {},
             aiSuggestions: aiSuggestions || null,
           }),
+          cloudSaveStatus: 'idle',
+          cloudSaveConflict: null,
         }),
 
     }),

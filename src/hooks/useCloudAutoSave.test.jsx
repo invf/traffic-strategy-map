@@ -170,6 +170,80 @@ describe('useCloudAutoSave (ADV-004-FIX-3 requirement B)', () => {
     expect(useStore.getState().activeCloudUpdatedAt).toBe('overwritten');
   });
 
+  // ADV-004-FIX-3 (Final Async Save Identity Guard) - the owner's reported
+  // race: an auto-save's response must never reassign activeProjectId/
+  // activeCloudUpdatedAt/lastSyncedSnapshot out from under whatever
+  // strategy the user has since switched to.
+  it('scenario: switching to a DIFFERENT Cloud Strategy while a save is in flight - the stale response never corrupts the newly active strategy\'s identity', async () => {
+    mockUseAuth.mockReturnValue({ status: 'authenticated' });
+    useStore.getState().loadStrategy({ id: 'strategy-A', nodes: [NODE_N1], edges: [], productInfo: { name: 'A' }, aiSuggestions: null, updatedAt: 'a-t1' });
+
+    let resolveSaveA;
+    updateStrategy.mockImplementationOnce(() => new Promise((res) => { resolveSaveA = res; }));
+
+    renderHook(() => useCloudAutoSave('ready'));
+    act(() => { useStore.getState().setProductInfo({ name: 'A edited' }); });
+    await waitFor(() => expect(updateStrategy).toHaveBeenCalledTimes(1), LONG_WAIT);
+    expect(updateStrategy.mock.calls[0][0]).toBe('strategy-A');
+
+    // The user switches to a completely different Cloud Strategy WHILE
+    // strategy A's save is still in flight.
+    const STRATEGY_B_NODE = { id: 'b1', data: { label: 'B node', context: {}, actionPlan: {}, sourceDecisionRef: null, locallyEdited: false } };
+    act(() => {
+      useStore.getState().loadStrategy({ id: 'strategy-B', nodes: [STRATEGY_B_NODE], edges: [], productInfo: { name: 'B' }, aiSuggestions: null, updatedAt: 'b-t1' });
+    });
+    expect(useStore.getState().activeProjectId).toBe('strategy-B');
+
+    // Strategy A's PATCH now resolves - its response must be dropped,
+    // never applied to what is now strategy B.
+    await act(async () => { resolveSaveA({ id: 'strategy-A', updatedAt: 'a-t2' }); });
+    // Give any (incorrect) state update a moment to land before asserting.
+    await new Promise((r) => setTimeout(r, 100));
+
+    const s = useStore.getState();
+    expect(s.activeProjectId).toBe('strategy-B'); // never reassigned back to A
+    expect(s.activeProjectSource).toBe('cloud');
+    expect(s.activeCloudUpdatedAt).toBe('b-t1'); // B's own baseline, not A's stale 'a-t2'
+    expect(s.nodes).toEqual([STRATEGY_B_NODE]); // B's canvas, untouched
+    expect(s.productInfo).toEqual({ name: 'B' });
+    // B's own dirty baseline is unaffected by A's stale response - loadStrategy's
+    // snapshot (clean) is exactly what it was.
+    expect(s.isDirty()).toBe(false);
+  }, 10000);
+
+  it('scenario: switching strategies while an in-flight conflict OVERWRITE is pending - the stale response never corrupts the newly active strategy', async () => {
+    mockUseAuth.mockReturnValue({ status: 'authenticated' });
+    useStore.getState().loadStrategy({ id: 'strategy-A', nodes: [NODE_N1], edges: [], productInfo: { name: 'A' }, aiSuggestions: null, updatedAt: 'a-t1' });
+    useStore.getState().setCloudSaveConflict({ id: 'strategy-A', updatedAt: 'a-fresh' });
+
+    let resolveOverwrite;
+    updateStrategy.mockImplementationOnce(() => new Promise((res) => { resolveOverwrite = res; }));
+
+    const overwritePromise = resolveCloudSaveConflict('overwrite');
+    await waitFor(() => expect(updateStrategy).toHaveBeenCalledTimes(1), LONG_WAIT);
+    expect(updateStrategy.mock.calls[0][0]).toBe('strategy-A');
+
+    // The user switches to a different Cloud Strategy before A's
+    // "Overwrite Anyway" request resolves.
+    const STRATEGY_B_NODE = { id: 'b1', data: { label: 'B node', context: {}, actionPlan: {}, sourceDecisionRef: null, locallyEdited: false } };
+    act(() => {
+      useStore.getState().loadStrategy({ id: 'strategy-B', nodes: [STRATEGY_B_NODE], edges: [], productInfo: { name: 'B' }, aiSuggestions: null, updatedAt: 'b-t1' });
+    });
+    // loadStrategy clears any stale conflict too.
+    expect(useStore.getState().cloudSaveConflict).toBe(null);
+
+    await act(async () => {
+      resolveOverwrite({ id: 'strategy-A', updatedAt: 'a-overwritten' });
+      await overwritePromise;
+    });
+
+    const s = useStore.getState();
+    expect(s.activeProjectId).toBe('strategy-B');
+    expect(s.activeCloudUpdatedAt).toBe('b-t1');
+    expect(s.nodes).toEqual([STRATEGY_B_NODE]);
+    expect(s.cloudSaveConflict).toBe(null);
+  }, 10000);
+
   it('scenario: a Local Draft\'s edits are never sent to the cloud - no save is scheduled, isDirty stays false', async () => {
     mockUseAuth.mockReturnValue({ status: 'authenticated' });
     expect(useStore.getState().activeProjectSource).toBe('local');

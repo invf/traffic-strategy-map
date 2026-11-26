@@ -44,10 +44,12 @@ export function useCloudAutoSave(urlLoadState) {
   // the LATEST canvas via getState() at the moment it actually fires,
   // never a value captured when the timer was first scheduled - this is
   // what makes "prevent older responses from overwriting newer local
-  // state" true: a save's response is only ever used to update save
-  // BOOKKEEPING (updatedAt/lastSyncedSnapshot-via-setActiveCloudProject),
-  // never to overwrite canvas CONTENT, so there is no stale-content
-  // response to apply in the first place.
+  // state" true for CANVAS CONTENT. It does NOT, by itself, protect
+  // IDENTITY: a save's response still needs its own guard (below) before
+  // touching activeProjectId/activeProjectSource/activeCloudUpdatedAt/
+  // lastSyncedSnapshot, in case the user switched to a different Cloud
+  // Strategy (or a Local Draft) while this request was in flight - see
+  // the Final Async Save Identity Guard comment on attemptSave itself.
   const savingRef = useRef(false);
   const pendingRef = useRef(false);
 
@@ -74,6 +76,21 @@ export function useCloudAutoSave(urlLoadState) {
       s.setCloudSaveConflict(null);
 
       const { activeProjectId, activeCloudUpdatedAt, nodes, edges, productInfo, aiSuggestions } = useStore.getState();
+      // Final Async Save Identity Guard - captured HERE, before the
+      // network call, so it reflects whichever strategy this specific
+      // request is actually for (requirement 1). If the user switches to
+      // a different Cloud Strategy (or a Local Draft) while this PATCH is
+      // in flight, activeProjectId in the store will have moved on by the
+      // time the response arrives - checked below (requirements 2-4)
+      // before this response is allowed to touch activeProjectId/
+      // activeProjectSource/activeCloudUpdatedAt/lastSyncedSnapshot/
+      // cloudSaveStatus/cloudSaveConflict, every one of which belongs to
+      // whatever is active NOW, not to this stale request. The server
+      // write itself already succeeded or failed regardless; only the
+      // CLIENT-side bookkeeping for a strategy no longer on screen is
+      // skipped - the newly active strategy's own nodes/edges/dirty
+      // baseline are never touched by this, since skipping is a no-op.
+      const requestedProjectId = activeProjectId;
       try {
         const saved = await updateStrategy(activeProjectId, {
           nodes,
@@ -82,6 +99,7 @@ export function useCloudAutoSave(urlLoadState) {
           aiSuggestions,
           expectedUpdatedAt: activeCloudUpdatedAt,
         });
+        if (useStore.getState().activeProjectId !== requestedProjectId) return; // stale - switched away while in flight
         // Requirement: "handle repeated edits during a save without
         // losing the latest changes." Deliberately NOT the generic
         // setActiveCloudProject(id, updatedAt) action here - that primitive
@@ -103,6 +121,7 @@ export function useCloudAutoSave(urlLoadState) {
         });
         useStore.getState().setCloudSaveStatus('saved');
       } catch (err) {
+        if (useStore.getState().activeProjectId !== requestedProjectId) return; // stale - switched away while in flight
         if (err instanceof StrategiesApiError && err.status === 409 && err.data?.current) {
           // Requirement: "handle version conflicts without silent
           // overwrite" - never retried automatically; the TopBar
@@ -197,6 +216,13 @@ export function useCloudAutoSave(urlLoadState) {
 export async function resolveCloudSaveConflict(action) {
   const s = useStore.getState();
   if (!s.cloudSaveConflict) return;
+  // Final Async Save Identity Guard (requirement 5) - a defensive check:
+  // loadStrategy() now clears cloudSaveConflict on every switch (see its
+  // own comment in useStore.js), so a conflict surfaced for strategy A
+  // should never still be sitting here once the user has switched to
+  // strategy B. Checked anyway, cheaply, in case either action is ever
+  // invoked from somewhere that doesn't go through loadStrategy.
+  if (s.cloudSaveConflict.id && s.cloudSaveConflict.id !== s.activeProjectId) return;
   if (action === 'reload') {
     s.loadStrategy(s.cloudSaveConflict);
     s.setCloudSaveConflict(null);
@@ -205,10 +231,17 @@ export async function resolveCloudSaveConflict(action) {
   }
   // 'overwrite' - retries the EXACT SAME save, this time unconditional
   // (no expectedUpdatedAt), same as SaveTab's own handleUpdate(true).
+  // `requestedProjectId` captured HERE, before the async call - same
+  // reasoning as attemptSave's own guard above: the user may switch to a
+  // different Cloud Strategy (or a Local Draft) while this PATCH is in
+  // flight, and a stale response must never reassign identity/baseline
+  // out from under whatever is active now.
+  const requestedProjectId = s.activeProjectId;
   s.setCloudSaveStatus('saving');
   try {
     const { activeProjectId, nodes, edges, productInfo, aiSuggestions } = useStore.getState();
     const saved = await updateStrategy(activeProjectId, { nodes, edges, productInfo, aiSuggestions });
+    if (useStore.getState().activeProjectId !== requestedProjectId) return; // stale - switched away while in flight
     // Same reasoning as attemptSave above - rebase the dirty baseline
     // against what was ACTUALLY just sent, not whatever is live by the
     // time the response arrives.
@@ -221,6 +254,7 @@ export async function resolveCloudSaveConflict(action) {
     useStore.getState().setCloudSaveConflict(null);
     useStore.getState().setCloudSaveStatus('saved');
   } catch {
+    if (useStore.getState().activeProjectId !== requestedProjectId) return; // stale - switched away while in flight
     useStore.getState().setCloudSaveStatus('error');
   }
 }
