@@ -122,4 +122,26 @@ describe('useStore - cloud projects (AUTH-004)', () => {
     useStore.getState().patchCloudProjectLocal('cloud-a', { name: 'New name' });
     expect(useStore.getState().cloudProjects).toEqual([{ id: 'cloud-a', name: 'New name' }, { id: 'cloud-b', name: 'Other' }]);
   });
+
+  // ADV-004-FIX-3 (requirement D/E#10) - "mark manually-modified imported
+  // nodes locallyEdited=true." Proves the flag these edit actions already
+  // set (from ADV-004) still behaves correctly: only ever flips for a node
+  // that actually carries a sourceDecisionRef (import-sourced); a
+  // hand-created node (sourceDecisionRef: null) is never touched by this,
+  // since nothing ever reads the flag for it in the first place.
+  it('updateNodeData/updateContext/updateActionPlan mark an import-sourced node locallyEdited, but never a hand-created one', () => {
+    const imported = { id: 'imp1', data: { label: 'Imported', context: {}, actionPlan: {}, sourceDecisionRef: { exportId: 'exp1', decisionId: 'dec1', decisionType: 'action' }, locallyEdited: false } };
+    const handCreated = { id: 'hand1', data: { label: 'Mine', context: {}, actionPlan: {}, sourceDecisionRef: null, locallyEdited: false } };
+    useStore.setState({ ...RESET_STATE, nodes: [imported, handCreated], activeProjectSource: 'cloud', activeProjectId: 'cloud-abc' });
+
+    useStore.getState().updateNodeData('imp1', { label: 'Edited by user' });
+    useStore.getState().updateContext('hand1', { why: 'because' });
+
+    const s = useStore.getState();
+    expect(s.nodes.find((n) => n.id === 'imp1').data.locallyEdited).toBe(true);
+    expect(s.nodes.find((n) => n.id === 'hand1').data.locallyEdited).toBe(false);
+    // Provenance itself (the link back to the AI decision) is preserved,
+    // never cleared by editing.
+    expect(s.nodes.find((n) => n.id === 'imp1').data.sourceDecisionRef).toEqual({ exportId: 'exp1', decisionId: 'dec1', decisionType: 'action' });
+  });
 });

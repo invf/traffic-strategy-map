@@ -14,7 +14,8 @@ import { generateAISuggestions } from './data/mockData';
 import { useTranslation } from './i18n/useTranslation';
 import { useCloudProjectsSync } from './hooks/useCloudProjectsSync';
 import { useAdveserProjectsSync } from './hooks/useAdveserProjectsSync';
-import { useOpenStrategyFromUrl } from './hooks/useOpenStrategyFromUrl';
+import { useOpenStrategyFromUrl, readStrategyIdFromUrl } from './hooks/useOpenStrategyFromUrl';
+import { useCloudAutoSave } from './hooks/useCloudAutoSave';
 
 // AUTH-003B - backend/routes/ssoRoutes.js redirects a failed sign-in
 // back here as `?sso_error=<code>`, never a raw 500 or a dead end.
@@ -40,19 +41,54 @@ function useSsoErrorBanner() {
 }
 
 export default function App() {
-  const { activeView, showSetup, showStrategies, setAiSuggestions, productInfo, initProjects } = useStore();
+  const { activeView, showSetup, showStrategies, setAiSuggestions, productInfo, initProjects, activeProjectId, activeProjectSource } = useStore();
   const t = useTranslation();
   const [ssoErrorCode, dismissSsoError] = useSsoErrorBanner();
   useCloudProjectsSync();
   useAdveserProjectsSync();
   const strategyLoadState = useOpenStrategyFromUrl();
+  useCloudAutoSave(strategyLoadState);
 
   useEffect(() => {
+    // ADV-004-FIX-3 (requirement C) - "prevent default initialization...
+    // from overwriting it": a `?strategy=<id>` URL is about to load (or
+    // is loading) a specific Cloud Strategy via useOpenStrategyFromUrl -
+    // initProjects() creating/activating a brand-new LOCAL draft at this
+    // exact moment would hijack activeProjectId the instant before the
+    // URL loader's own fetch resolves (harmless once it resolves, since
+    // loadStrategy() always wins last, but a needless, confusing
+    // transition to skip entirely when there is nothing for it to do
+    // for a URL-driven load in the first place).
+    if (readStrategyIdFromUrl()) return;
     initProjects();
     if (productInfo.name) {
       setAiSuggestions(generateAISuggestions(productInfo));
     }
   }, []); // eslint-disable-line
+
+  // ADV-004-FIX-3 (requirement C) - "keep URL, cloud strategy ID and
+  // active graph synchronized": whenever the active project becomes (or
+  // changes to a different) linked Cloud Strategy - via the Project
+  // Switcher, StrategiesModal's Load, or the import flow's own
+  // loadStrategy() call in this exact tab - the URL is kept pointing at
+  // it, so a later reload or copy-pasted link always restores the SAME
+  // strategy. A pure observer: reads state, writes the URL, never the
+  // other way - useOpenStrategyFromUrl only ever reads the URL once per
+  // mount (guarded by its own attemptedRef), so this never triggers a
+  // redundant re-fetch of content already loaded directly into the store.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const current = params.get('strategy');
+    if (activeProjectSource === 'cloud' && activeProjectId) {
+      if (current === activeProjectId) return;
+      params.set('strategy', activeProjectId);
+    } else {
+      if (current === null) return;
+      params.delete('strategy');
+    }
+    const next = `${window.location.pathname}${params.toString() ? `?${params}` : ''}`;
+    window.history.replaceState({}, '', next);
+  }, [activeProjectId, activeProjectSource]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#070818]">

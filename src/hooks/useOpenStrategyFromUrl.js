@@ -24,7 +24,10 @@ import { useAuth } from './useAuth';
 import { useStore } from '../store/useStore';
 import { getStrategy, StrategiesApiError } from '../services/strategies';
 
-function readStrategyIdFromUrl() {
+// ADV-004-FIX-3 - exported so App.jsx can gate initProjects() behind the
+// SAME check ("Prevent default initialization... from overwriting it" -
+// requirement C) without duplicating the param-reading logic.
+export function readStrategyIdFromUrl() {
   if (typeof window === 'undefined') return null;
   return new URLSearchParams(window.location.search).get('strategy');
 }

@@ -9,6 +9,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useTranslation } from '../i18n/useTranslation';
 import { getStrategy, createStrategy, updateStrategy, deleteStrategy } from '../services/strategies';
 import { resolveUniqueCloudName } from '../lib/cloudProjectNaming';
+import { resolveCloudSaveConflict } from '../hooks/useCloudAutoSave';
 import AccountButton from './AccountButton';
 import AdveserProjectsSelector from './AdveserProjectsSelector';
 
@@ -600,6 +601,7 @@ export default function TopBar() {
     language, setLanguage,
     setShowStrategies,
     canvasBg, setCanvasBg,
+    activeProjectSource, cloudSaveStatus, cloudSaveConflict,
   } = useStore();
 
   const t = useTranslation();
@@ -697,6 +699,59 @@ export default function TopBar() {
           </span>
           <ChevronDown size={10} className="text-slate-400 group-hover:text-slate-200 transition-colors" />
         </button>
+      )}
+
+      {/* ADV-004-FIX-3 (requirement D) - a Cloud Strategy badge, always
+          shown whenever one is active, distinguishing it at a glance from
+          the Local Draft generation workflow Edit Product otherwise
+          implies (requirement 4's "the UI does not clearly distinguish
+          an imported, persisted Cloud Strategy from a new local strategy
+          generation workflow"). */}
+      {activeProjectSource === 'cloud' && (
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-[11px] font-semibold text-cyan-300">
+          <Cloud size={12} />
+          <span className="hidden sm:inline">{t('cloud_strategy_badge')}</span>
+        </div>
+      )}
+
+      {/* ADV-004-FIX-3 (requirement B) - explicit Saving/Saved/Unsaved/
+          Error/Conflict indicator. Never claims a save succeeded before
+          the server actually confirms it (useCloudAutoSave.js only ever
+          sets 'saved' inside a resolved PATCH's own .then branch). */}
+      {activeProjectSource === 'cloud' && cloudSaveStatus !== 'idle' && (
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold">
+          {cloudSaveStatus === 'saving' && (
+            <span className="flex items-center gap-1.5 text-slate-400">
+              <Loader2 size={12} className="animate-spin" /> {t('cloud_save_saving')}
+            </span>
+          )}
+          {cloudSaveStatus === 'saved' && (
+            <span className="flex items-center gap-1.5 text-emerald-400">
+              <Check size={12} /> {t('cloud_save_saved')}
+            </span>
+          )}
+          {cloudSaveStatus === 'unsaved' && (
+            <span className="flex items-center gap-1.5 text-amber-400">
+              <AlertCircle size={12} /> {t('cloud_save_unsaved')}
+            </span>
+          )}
+          {cloudSaveStatus === 'error' && (
+            <span className="flex items-center gap-1.5 text-red-400">
+              <AlertCircle size={12} /> {t('cloud_save_error')}
+            </span>
+          )}
+          {cloudSaveStatus === 'conflict' && cloudSaveConflict && (
+            <span className="flex items-center gap-1.5 text-amber-400">
+              <AlertCircle size={12} /> {t('cloud_conflict_title')}
+              <button onClick={() => resolveCloudSaveConflict('reload')} className="underline hover:text-amber-200">
+                {t('cloud_conflict_reload_btn')}
+              </button>
+              <button onClick={() => resolveCloudSaveConflict('overwrite')} className="underline hover:text-amber-200">
+                {t('cloud_conflict_overwrite_btn')}
+              </button>
+            </span>
+          )}
+        </div>
       )}
 
       {/* Progress bar */}

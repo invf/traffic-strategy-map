@@ -194,17 +194,40 @@ export const useStore = create(
       // field while keeping the two id spaces (ad hoc `proj_...` vs
       // real UUIDs) unambiguous by construction (they never overlap).
       //
-      // cloudProjects/activeProjectSource/activeCloudUpdatedAt/
-      // lastSyncedSnapshot are deliberately NOT in this store's
-      // `partialize` below - they stay in-memory only, re-hydrated
-      // fresh from the server on every sign-in (see
+      // cloudProjects/lastSyncedSnapshot are deliberately NOT in this
+      // store's `partialize` below - they stay in-memory only,
+      // re-hydrated fresh from the server on every sign-in (see
       // src/hooks/useCloudProjectsSync.js). That's what makes "never
       // display another account's cached private projects" true by
       // construction rather than by remembering to clear a cache.
+      //
+      // ADV-004-FIX-3 root-cause fix: activeProjectSource/
+      // activeCloudUpdatedAt USED to be excluded here too, on the same
+      // reasoning - but `nodes`/`edges`/`activeProjectId` were ALREADY
+      // persisted (below), so a plain page reload rehydrated
+      // `activeProjectId` as a real cloud UUID while `activeProjectSource`
+      // reset to its hard-coded 'local' default - a genuine, reproducible
+      // inconsistency (getActiveProject() would look the id up in the
+      // wrong list) that a reload's own URL-driven loadStrategy() call
+      // only self-corrected AFTER its async fetch resolved, not before.
+      // Persisting these two closes that window - it introduces no NEW
+      // cross-account exposure beyond what nodes/edges/activeProjectId
+      // already carry (a genuinely separate, pre-existing characteristic
+      // of this store's local-draft-era design, out of this fix's scope).
       cloudProjects: [],
       activeProjectSource: 'local',
       activeCloudUpdatedAt: null,
       lastSyncedSnapshot: null,
+      // ADV-004-FIX-3 - Cloud Auto-Save status, purely for the TopBar
+      // indicator (Saving/Saved/Unsaved/Error/Conflict - requirement B).
+      // In-memory only, like cloudProjects above - a stale "Saved" from a
+      // previous session surviving a reload would be actively misleading.
+      cloudSaveStatus: 'idle', // idle | saving | saved | unsaved | error | conflict
+      // The server's current row on a 409 (see StrategiesModal.jsx's
+      // SaveTab, which already established this exact shape/flow) - lets
+      // the indicator offer "Reload Latest"/"Overwrite Anyway" without a
+      // second fetch.
+      cloudSaveConflict: null,
 
       getActiveProject: () => {
         const s = get();
@@ -256,6 +279,11 @@ export const useStore = create(
         })),
 
       addCloudProject: (project) => set((s) => ({ cloudProjects: [project, ...s.cloudProjects] })),
+
+      // ADV-004-FIX-3 - driven by useCloudAutoSave.js; a plain setter so
+      // the hook (not a component) owns the actual save logic/timing.
+      setCloudSaveStatus: (status) => set({ cloudSaveStatus: status }),
+      setCloudSaveConflict: (row) => set({ cloudSaveConflict: row }),
 
       patchCloudProjectLocal: (id, patch) =>
         set((s) => ({ cloudProjects: s.cloudProjects.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
@@ -602,6 +630,10 @@ export const useStore = create(
         canvasBg: s.canvasBg,
         projects: s.projects,
         activeProjectId: s.activeProjectId,
+        // ADV-004-FIX-3 - see this slice's own header comment above for
+        // why these two join activeProjectId/nodes/edges here now.
+        activeProjectSource: s.activeProjectSource,
+        activeCloudUpdatedAt: s.activeCloudUpdatedAt,
         accountUrls: s.accountUrls,
       }),
     }

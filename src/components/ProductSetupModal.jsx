@@ -27,8 +27,23 @@ function Field({ label, required, Icon, children }) {
 }
 
 export default function ProductSetupModal() {
-  const { productInfo, generateMap, setShowSetup, setAiSuggestions, isGenerating, setIsGenerating, language } = useStore();
+  const {
+    productInfo, generateMap, setProductInfo, setShowSetup, setAiSuggestions,
+    isGenerating, setIsGenerating, language, activeProjectSource, nodes,
+  } = useStore();
   const t = useTranslation();
+  // ADV-004-FIX-3 (requirement A) - the root fix for "Edit Product
+  // replaces the imported graph": when a linked Cloud Strategy is
+  // active, this modal edits PRODUCT METADATA ONLY by default
+  // (setProductInfo - never touches nodes/edges/showSetup at all).
+  // AI regeneration remains available, but only as a separate, clearly-
+  // labeled, explicitly-confirmed action - never the default "Save"
+  // behavior, and its own failure path never falls back to the mock
+  // template (requirement: "AI generation errors must preserve the
+  // current graph" / "never silently fall back to a mock/template
+  // strategy in the context of editing a saved Cloud Strategy").
+  const isCloudStrategy = activeProjectSource === 'cloud';
+  const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
 
   const [form, setForm] = useState({
     name: productInfo.name || '',
@@ -53,6 +68,17 @@ export default function ProductSetupModal() {
 
   const isValid = form.name.trim() && form.description.trim() && form.audience.trim();
 
+  // ADV-004-FIX-3 (requirement A) - the ONLY action available by default
+  // while editing a linked Cloud Strategy: a plain metadata merge via the
+  // store's EXISTING setProductInfo action (never nodes/edges, never
+  // showSetup). Closing the modal afterward is an explicit, separate
+  // click (the existing Cancel/X button), never automatic here, so the
+  // user can keep adjusting fields without the modal popping shut on them.
+  const handleSaveMetadataOnly = () => {
+    if (!isValid) return;
+    setProductInfo(form);
+  };
+
   const handleGenerate = async () => {
     if (!isValid) return;
     setIsGenerating(true);
@@ -73,13 +99,29 @@ export default function ProductSetupModal() {
       // falls back to whatever the backend said.
       const key = errorKeyForStatus(err?.status);
       setGenError(key ? t(key) : (err.message || 'Помилка AI. Використовую базову стратегію.'));
-      // Fallback to mock data
-      generateMap(form);
-      setAiSuggestions(generateAISuggestions(form));
+      // ADV-004-FIX-3 (requirement A) - "AI generation errors must
+      // preserve the current graph" / "never silently fall back to a
+      // mock/template strategy in the context of editing a saved Cloud
+      // Strategy": the mock-data fallback below is PRESERVED exactly as
+      // it always was for the Local Draft generation workflow (an
+      // existing, already-accepted UX this fix must not change - "no
+      // unrelated architecture changes") - it is simply never reachable
+      // for a Cloud Strategy, since this whole function is now only
+      // ever invoked from the explicitly-confirmed "Regenerate" action
+      // below, not from editing a Cloud Strategy's product metadata.
+      if (!isCloudStrategy) {
+        generateMap(form);
+        setAiSuggestions(generateAISuggestions(form));
+      }
     } finally {
       setIsGenerating(false);
       setGenStep('');
     }
+  };
+
+  const handleConfirmRegenerate = () => {
+    setShowRegenerateConfirm(false);
+    handleGenerate();
   };
 
   return (
@@ -213,25 +255,79 @@ export default function ProductSetupModal() {
             </div>
           )}
 
-          <div className="flex gap-3">
-            {productInfo.name && (
+          {/* ADV-004-FIX-3 (requirement A) - a linked Cloud Strategy gets
+              a completely different primary action: Save (metadata only,
+              never nodes/edges) instead of Generate. The legacy
+              generator stays available, but only as a separate,
+              de-emphasized, explicitly-confirmed action - never the
+              default button a habitual click would land on. */}
+          {isCloudStrategy ? (
+            <>
+              {showRegenerateConfirm && (
+                <div className="flex flex-col gap-2 px-3 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-200 text-[12px]">
+                  <span>{t('modal_regenerate_confirm_text').replace('{count}', String(nodes.length))}</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowRegenerateConfirm(false)}
+                      className="flex-1 py-1.5 rounded-lg border border-white/15 text-slate-300 hover:text-white text-[11px] font-semibold transition-colors"
+                    >
+                      {t('modal_btn_cancel')}
+                    </button>
+                    <button
+                      onClick={handleConfirmRegenerate}
+                      disabled={!isValid || isGenerating}
+                      className="flex-1 py-1.5 rounded-lg bg-amber-600/80 hover:bg-amber-600 text-white text-[11px] font-semibold transition-colors disabled:opacity-50"
+                    >
+                      {t('modal_regenerate_confirm_btn')}
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowSetup(false)}
+                  disabled={isGenerating}
+                  className="flex-1 py-2.5 rounded-xl border border-white/[0.1] text-slate-400 hover:text-white hover:border-white/20 text-[13px] font-semibold transition-colors disabled:opacity-40"
+                >
+                  {t('modal_btn_cancel')}
+                </button>
+                <button
+                  onClick={handleSaveMetadataOnly}
+                  disabled={!isValid}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors shadow-lg shadow-indigo-500/20"
+                >
+                  {t('modal_btn_save_details')}
+                </button>
+              </div>
               <button
-                onClick={() => setShowSetup(false)}
+                onClick={() => setShowRegenerateConfirm(true)}
                 disabled={isGenerating}
-                className="flex-1 py-2.5 rounded-xl border border-white/[0.1] text-slate-400 hover:text-white hover:border-white/20 text-[13px] font-semibold transition-colors disabled:opacity-40"
+                className="text-[11px] text-slate-500 hover:text-amber-300 underline self-center transition-colors disabled:opacity-40"
               >
-                {t('modal_btn_cancel')}
+                {isGenerating ? genStep || t('modal_btn_generate') : t('modal_btn_regenerate')}
               </button>
-            )}
-            <button
-              onClick={handleGenerate}
-              disabled={!isValid || isGenerating}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors shadow-lg shadow-indigo-500/20"
-            >
-              <Zap size={14} className={isGenerating ? 'animate-spin' : ''} />
-              {isGenerating ? genStep || 'Генерую...' : t('modal_btn_generate')}
-            </button>
-          </div>
+            </>
+          ) : (
+            <div className="flex gap-3">
+              {productInfo.name && (
+                <button
+                  onClick={() => setShowSetup(false)}
+                  disabled={isGenerating}
+                  className="flex-1 py-2.5 rounded-xl border border-white/[0.1] text-slate-400 hover:text-white hover:border-white/20 text-[13px] font-semibold transition-colors disabled:opacity-40"
+                >
+                  {t('modal_btn_cancel')}
+                </button>
+              )}
+              <button
+                onClick={handleGenerate}
+                disabled={!isValid || isGenerating}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-semibold transition-colors shadow-lg shadow-indigo-500/20"
+              >
+                <Zap size={14} className={isGenerating ? 'animate-spin' : ''} />
+                {isGenerating ? genStep || 'Генерую...' : t('modal_btn_generate')}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
