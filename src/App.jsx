@@ -16,6 +16,7 @@ import { useCloudProjectsSync } from './hooks/useCloudProjectsSync';
 import { useAdveserProjectsSync } from './hooks/useAdveserProjectsSync';
 import { useOpenStrategyFromUrl, readStrategyIdFromUrl } from './hooks/useOpenStrategyFromUrl';
 import { useCloudAutoSave } from './hooks/useCloudAutoSave';
+import { shouldSyncStrategyUrl } from './lib/strategyUrlSync';
 
 // AUTH-003B - backend/routes/ssoRoutes.js redirects a failed sign-in
 // back here as `?sso_error=<code>`, never a raw 500 or a dead end.
@@ -76,7 +77,31 @@ export default function App() {
   // other way - useOpenStrategyFromUrl only ever reads the URL once per
   // mount (guarded by its own attemptedRef), so this never triggers a
   // redundant re-fetch of content already loaded directly into the store.
+  //
+  // ADV-004-FIX-4 (Strategy URL Bootstrap Race) - confirmed root cause of
+  // "?strategy=<uuid> gets stuck on 'loading' forever": this effect runs
+  // on every activeProjectId/activeProjectSource change, INCLUDING the
+  // very first render - at that point, before useOpenStrategyFromUrl's
+  // async fetch has resolved, the store still reports whatever was
+  // rehydrated from localStorage (typically a Local Draft, source
+  // 'local'). That used to fall into the `else` branch below and delete
+  // the just-requested `?strategy=` param before the fetch even started -
+  // after which useOpenStrategyFromUrl's own effect (re-run once auth
+  // resolved) would read the URL again, find nothing, and never recover.
+  // Gated now on strategyLoadState: this effect does nothing at all while
+  // a `?strategy=` navigation is pending ('loading') or has only reached a
+  // non-final state that can still resolve once auth completes
+  // ('unauthorized' - requirement 6, "preserve direct links across... SSO
+  // authentication"). It only ever reads/writes the URL once there is
+  // nothing left pending - 'idle' (no such param at all) or 'ready' (the
+  // requested strategy is already the active one) - which is exactly the
+  // same condition App.jsx already uses to stop showing the loading
+  // overlay below, so the two can never disagree about the URL. A
+  // terminal failure ('not-found'/'error') is deliberately left alone too
+  // - the URL keeps showing exactly what the user asked for, matching the
+  // error already on screen, rather than silently rewriting it.
   useEffect(() => {
+    if (!shouldSyncStrategyUrl(strategyLoadState)) return;
     const params = new URLSearchParams(window.location.search);
     const current = params.get('strategy');
     if (activeProjectSource === 'cloud' && activeProjectId) {
@@ -88,7 +113,7 @@ export default function App() {
     }
     const next = `${window.location.pathname}${params.toString() ? `?${params}` : ''}`;
     window.history.replaceState({}, '', next);
-  }, [activeProjectId, activeProjectSource]);
+  }, [activeProjectId, activeProjectSource, strategyLoadState]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#070818]">

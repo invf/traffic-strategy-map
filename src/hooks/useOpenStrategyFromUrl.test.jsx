@@ -119,4 +119,108 @@ describe('useOpenStrategyFromUrl', () => {
     rerender();
     expect(getStrategy).toHaveBeenCalledTimes(1); // still exactly once - opening/reloading this URL never triggers regeneration
   });
+
+  // ADV-004-FIX-4 (Strategy URL Bootstrap Race) - confirmed root cause:
+  // App.jsx's own URL-sync effect used to run on the very first render,
+  // before this hook's async fetch resolved, saw the store still
+  // reporting a Local Draft (rehydrated from localStorage) and deleted
+  // the just-requested `?strategy=` param. Once auth resolved, this
+  // hook's own effect re-read the (now-stripped) URL, found nothing, and
+  // stayed stuck on 'loading' forever. These tests prove the fix: the id
+  // is captured once, immutably, and the fetch proceeds from that
+  // captured value regardless of what happens to the live URL afterward.
+  describe('Strategy URL Bootstrap Race (ADV-004-FIX-4)', () => {
+    it('direct ?strategy=<uuid> URL with an initially-local store (RESET_STATE itself) still resolves - the hook never depends on activeProjectSource', async () => {
+      setUrl('/?strategy=abc-123');
+      expect(useStore.getState().activeProjectSource).toBe('local'); // the exact pre-condition that used to trigger the bug
+      mockUseAuth.mockReturnValue({ status: 'authenticated' });
+      getStrategy.mockResolvedValue({ id: 'abc-123', nodes: [{ id: 'n1' }], edges: [], productInfo: {}, aiSuggestions: null, updatedAt: 't1' });
+
+      const { result } = renderHook(() => useOpenStrategyFromUrl());
+      await waitFor(() => expect(result.current).toBe('ready'));
+      expect(useStore.getState().activeProjectSource).toBe('cloud');
+    });
+
+    it('slow authentication: the requested id survives even if something else strips ?strategy= from the URL while auth is still resolving', async () => {
+      setUrl('/?strategy=abc-123');
+      mockUseAuth.mockReturnValue({ status: 'loading' });
+      getStrategy.mockResolvedValue({ id: 'abc-123', nodes: [{ id: 'n1' }], edges: [], productInfo: {}, aiSuggestions: null, updatedAt: 't1' });
+
+      const { result, rerender } = renderHook(() => useOpenStrategyFromUrl());
+      expect(result.current).toBe('loading');
+
+      // Simulates the OLD bug: something (the un-gated sync effect) wipes
+      // the URL's ?strategy= param while auth is still pending.
+      setUrl('/');
+      expect(readStrategyIdFromUrlLive()).toBe(null);
+
+      // Auth now resolves.
+      mockUseAuth.mockReturnValue({ status: 'authenticated' });
+      rerender();
+
+      // The hook must still fetch the ORIGINALLY requested id - captured
+      // before the URL was mutated - never read the (now-empty) live URL.
+      await waitFor(() => expect(getStrategy).toHaveBeenCalledWith('abc-123'));
+      await waitFor(() => expect(result.current).toBe('ready'));
+    });
+
+    it('SSO authentication (account switching mid-flight): signed-out -> authenticated still resolves even though the URL lost its param while unauthorized', async () => {
+      setUrl('/?strategy=abc-123');
+      mockUseAuth.mockReturnValue({ status: 'signed-out' });
+      getStrategy.mockResolvedValue({ id: 'abc-123', nodes: [{ id: 'n1' }], edges: [], productInfo: {}, aiSuggestions: null, updatedAt: 't1' });
+
+      const { result, rerender } = renderHook(() => useOpenStrategyFromUrl());
+      await waitFor(() => expect(result.current).toBe('unauthorized'));
+      expect(getStrategy).not.toHaveBeenCalled();
+
+      // The user completes SSO elsewhere; meanwhile the URL's param is
+      // gone (whether from the old bug or an unrelated navigation) - the
+      // hook's own captured id must not care.
+      setUrl('/');
+
+      mockUseAuth.mockReturnValue({ status: 'authenticated' });
+      rerender();
+
+      await waitFor(() => expect(getStrategy).toHaveBeenCalledWith('abc-123'));
+      await waitFor(() => expect(result.current).toBe('ready'));
+      expect(useStore.getState().activeProjectId).toBe('abc-123');
+    });
+
+    it('never gets stuck in "loading" forever - every path (success/not-found/error/unauthorized) reaches a terminal, non-loading state', async () => {
+      setUrl('/?strategy=abc-123');
+      mockUseAuth.mockReturnValue({ status: 'authenticated' });
+      getStrategy.mockRejectedValue(new FakeStrategiesApiError(404, 'not found'));
+
+      const { result } = renderHook(() => useOpenStrategyFromUrl());
+      await waitFor(() => expect(result.current).not.toBe('loading'));
+      expect(result.current).toBe('not-found');
+    });
+
+    it('switching to a DIFFERENT Cloud Strategy after the initial URL load stays "ready" - never re-fetches or regresses to "loading"', async () => {
+      setUrl('/?strategy=strategy-A');
+      mockUseAuth.mockReturnValue({ status: 'authenticated' });
+      getStrategy.mockResolvedValue({ id: 'strategy-A', nodes: [{ id: 'a1' }], edges: [], productInfo: { name: 'A' }, aiSuggestions: null, updatedAt: 'a-t1' });
+
+      const { result, rerender } = renderHook(() => useOpenStrategyFromUrl());
+      await waitFor(() => expect(result.current).toBe('ready'));
+      expect(useStore.getState().activeProjectId).toBe('strategy-A');
+
+      // The user now switches to a different Cloud Strategy via the
+      // Project Switcher / StrategiesModal (the same loadStrategy()
+      // primitive those UI entry points call) - not through this URL.
+      useStore.getState().loadStrategy({ id: 'strategy-B', nodes: [{ id: 'b1' }], edges: [], productInfo: { name: 'B' }, aiSuggestions: null, updatedAt: 'b-t1' });
+      rerender();
+
+      expect(result.current).toBe('ready'); // still ready - never re-enters 'loading'
+      expect(getStrategy).toHaveBeenCalledTimes(1); // never re-fetched strategy A, and never fetches B either (it wasn't opened via URL)
+      expect(useStore.getState().activeProjectId).toBe('strategy-B');
+      expect(useStore.getState().nodes).toEqual([{ id: 'b1' }]);
+    });
+  });
 });
+
+// Reads the LIVE url directly (not the hook's captured ref) - used only to
+// assert the test's own simulated mutation actually took effect.
+function readStrategyIdFromUrlLive() {
+  return new URLSearchParams(window.location.search).get('strategy');
+}

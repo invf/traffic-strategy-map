@@ -42,11 +42,29 @@ export function readStrategyIdFromUrl() {
 export function useOpenStrategyFromUrl() {
   const { status } = useAuth();
   const loadStrategy = useStore((s) => s.loadStrategy);
-  const [state, setState] = useState(() => (readStrategyIdFromUrl() ? 'loading' : 'idle'));
+  // ADV-004-FIX-4 (Strategy URL Bootstrap Race) - the requested id is
+  // captured EXACTLY ONCE, synchronously during the very first render
+  // (a ref's lazy-init argument runs before any effect, before auth has
+  // had a chance to resolve, before anything else touches the URL).
+  // Every later check/fetch in this hook reads THIS captured value, never
+  // `readStrategyIdFromUrl()` again - so it stays correct as "immutable
+  // navigation intent" even if the live `?strategy=` param is later
+  // stripped or rewritten by something else (the confirmed root cause:
+  // App.jsx's own URL-sync effect used to delete it while auth was still
+  // resolving, after which this hook's own effect - re-run once auth
+  // settled - would re-read the URL, find nothing, and get stuck in
+  // 'loading' forever). App.jsx's sync effect is now gated on this hook's
+  // own return value instead, but capturing the id here too means this
+  // hook's correctness never depends on what else happens to the URL.
+  const pendingStrategyIdRef = useRef();
+  if (pendingStrategyIdRef.current === undefined) {
+    pendingStrategyIdRef.current = readStrategyIdFromUrl();
+  }
+  const strategyId = pendingStrategyIdRef.current;
+  const [state, setState] = useState(() => (strategyId ? 'loading' : 'idle'));
   const attemptedRef = useRef(false);
 
   useEffect(() => {
-    const strategyId = readStrategyIdFromUrl();
     if (!strategyId) return;
 
     if (status === 'loading') return; // wait for auth to resolve first
@@ -77,7 +95,7 @@ export function useOpenStrategyFromUrl() {
           setState('error');
         }
       });
-  }, [status, loadStrategy]);
+  }, [status, loadStrategy, strategyId]);
 
   return state;
 }
