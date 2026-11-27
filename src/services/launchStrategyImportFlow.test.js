@@ -277,4 +277,98 @@ describe('importLaunchStrategy', () => {
     expect(findStrategyByProjectId).not.toHaveBeenCalledWith('proj-B');
     expect(createStrategy.mock.calls[0][0].projectId).toBe('proj-A');
   });
+
+  // ===== ADV-005 (owner correction #3) - product metadata precedence
+  // through the FULL import flow, not just the pure merge function. =====
+  describe('product metadata precedence', () => {
+    const PKG_WITH_METADATA = { ...PKG, productMetadata: { name: 'SentiPulse', description: 'Real-time sentiment analysis.', audience: 'Product managers', suggestedPrimaryObjective: 'signups' } };
+
+    it('on first import, the package\'s own product metadata is transferred, taking priority over the bare ADVESER project name', async () => {
+      getApprovedStrategyExport.mockResolvedValue({ id: 'export-1', strategyDecisionPackage: PKG_WITH_METADATA });
+      findStrategyByProjectId.mockResolvedValue(null);
+      createStrategy.mockResolvedValue({ id: 'new-strategy-id', updatedAt: 't1' });
+
+      await importLaunchStrategy('proj-1', 'My ADVESER Project');
+
+      const productInfo = createStrategy.mock.calls[0][0].productInfo;
+      expect(productInfo.name).toBe('SentiPulse'); // the AI's real product name wins over the generic project name
+      expect(productInfo.description).toBe('Real-time sentiment analysis.');
+      expect(productInfo.audience).toBe('Product managers');
+      expect(productInfo.goal).toBe('signups');
+    });
+
+    it('on first import, a version 1 package (no productMetadata at all) falls back to the ADVESER project name, exactly like before ADV-005', async () => {
+      getApprovedStrategyExport.mockResolvedValue({ id: 'export-1', strategyDecisionPackage: PKG }); // no productMetadata
+      findStrategyByProjectId.mockResolvedValue(null);
+      createStrategy.mockResolvedValue({ id: 'new-strategy-id', updatedAt: 't1' });
+
+      await importLaunchStrategy('proj-1', 'My ADVESER Project');
+
+      expect(createStrategy.mock.calls[0][0].productInfo.name).toBe('My ADVESER Project');
+    });
+
+    it('on re-import, a field the user has NOT manually edited since the last import is refreshed to the newer AI value', async () => {
+      getApprovedStrategyExport.mockResolvedValue({ id: 'export-2', strategyDecisionPackage: PKG_WITH_METADATA });
+      findStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-id' });
+      getStrategy.mockResolvedValue({
+        id: 'existing-strategy-id', nodes: [], edges: [],
+        productInfo: { name: 'SentiPulse (old)', aiSourceSnapshot: { name: 'SentiPulse (old)' } },
+        aiSuggestions: null,
+      });
+      updateStrategy.mockResolvedValue({ id: 'existing-strategy-id', updatedAt: 't2' });
+
+      await importLaunchStrategy('proj-1', 'My Project');
+
+      expect(updateStrategy.mock.calls[0][1].productInfo.name).toBe('SentiPulse'); // refreshed - matches the recorded snapshot, so safe
+    });
+
+    it('on re-import, a field the user HAS manually edited (e.g. via "Edit Product" -> Save) is never overwritten by newer AI metadata - "not a shallow merge"', async () => {
+      getApprovedStrategyExport.mockResolvedValue({ id: 'export-2', strategyDecisionPackage: PKG_WITH_METADATA });
+      findStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-id' });
+      getStrategy.mockResolvedValue({
+        id: 'existing-strategy-id', nodes: [], edges: [],
+        productInfo: { name: 'My Own Custom Product Name', aiSourceSnapshot: { name: 'SentiPulse (old AI value)' } },
+        aiSuggestions: null,
+      });
+      updateStrategy.mockResolvedValue({ id: 'existing-strategy-id', updatedAt: 't2' });
+
+      await importLaunchStrategy('proj-1', 'My Project');
+
+      expect(updateStrategy.mock.calls[0][1].productInfo.name).toBe('My Own Custom Product Name'); // the user's edit survives the re-import
+    });
+
+    it('on re-import, countries/budget (fields this merge does not track) are preserved untouched - only name/description/audience/goal are ever merged', async () => {
+      getApprovedStrategyExport.mockResolvedValue({ id: 'export-2', strategyDecisionPackage: PKG_WITH_METADATA });
+      findStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-id' });
+      getStrategy.mockResolvedValue({
+        id: 'existing-strategy-id', nodes: [], edges: [],
+        productInfo: { name: 'SentiPulse', countries: ['US', 'DE'], budget: '$5,000', aiSourceSnapshot: { name: 'SentiPulse' } },
+        aiSuggestions: null,
+      });
+      updateStrategy.mockResolvedValue({ id: 'existing-strategy-id', updatedAt: 't2' });
+
+      await importLaunchStrategy('proj-1', 'My Project');
+
+      const productInfo = updateStrategy.mock.calls[0][1].productInfo;
+      expect(productInfo.countries).toEqual(['US', 'DE']);
+      expect(productInfo.budget).toBe('$5,000');
+    });
+
+    it('repeated explicit re-imports with the SAME AI content do not keep changing productInfo on every call', async () => {
+      getApprovedStrategyExport.mockResolvedValue({ id: 'export-2', strategyDecisionPackage: PKG_WITH_METADATA });
+      findStrategyByProjectId.mockResolvedValue({ id: 'existing-strategy-id' });
+      getStrategy.mockResolvedValue({ id: 'existing-strategy-id', nodes: [], edges: [], productInfo: {}, aiSuggestions: null });
+      updateStrategy.mockResolvedValue({ id: 'existing-strategy-id', updatedAt: 't2' });
+
+      await importLaunchStrategy('proj-1', 'My Project');
+      const firstProductInfo = updateStrategy.mock.calls[0][1].productInfo;
+
+      getStrategy.mockResolvedValue({ id: 'existing-strategy-id', nodes: [], edges: [], productInfo: firstProductInfo, aiSuggestions: null });
+      await importLaunchStrategy('proj-1', 'My Project');
+      const secondProductInfo = updateStrategy.mock.calls[1][1].productInfo;
+
+      expect(secondProductInfo.name).toBe(firstProductInfo.name);
+      expect(secondProductInfo.description).toBe(firstProductInfo.description);
+    });
+  });
 });

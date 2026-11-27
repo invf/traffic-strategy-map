@@ -51,6 +51,22 @@ import { useStore } from '../store/useStore';
 import { getApprovedStrategyExport } from './launchStrategyImport';
 import { findStrategyByProjectId, getStrategy, createStrategy, updateStrategy } from './strategies';
 import { mapStrategyDecisionPackageToGraph, reconcileImportedGraph } from '../utils/strategyDecisionMapping';
+import { mergeProductMetadata } from '../utils/productMetadataMerge';
+
+// ADV-005 - the package's productMetadata (deterministic passthrough of
+// Launch Studio's own already-verified ProductIntelligence, plus the one
+// closed-enum suggestedPrimaryObjective) translated into TSM's own
+// productInfo field names. `undefined` for anything the package doesn't
+// offer - mergeProductMetadata already treats a missing/falsy value as
+// "nothing new to offer," never a blank to apply.
+function toProductInfoValues(productMetadata) {
+  return {
+    name: productMetadata?.name,
+    description: productMetadata?.description,
+    audience: productMetadata?.audience,
+    goal: productMetadata?.suggestedPrimaryObjective,
+  };
+}
 
 export async function importLaunchStrategy(adveserProjectId, adveserProjectName) {
   const exported = await getApprovedStrategyExport(adveserProjectId);
@@ -59,6 +75,7 @@ export async function importLaunchStrategy(adveserProjectId, adveserProjectName)
   }
 
   const { nodes: mappedNodes, edges: mappedEdges } = mapStrategyDecisionPackageToGraph(exported.strategyDecisionPackage, exported.id);
+  const aiProductValues = toProductInfoValues(exported.strategyDecisionPackage.productMetadata);
 
   // The ONLY lookup this function trusts to decide "does a strategy
   // already exist for this project" - the project_id column itself,
@@ -80,7 +97,19 @@ export async function importLaunchStrategy(adveserProjectId, adveserProjectName)
     addedCount = result.addedCount;
     preservedCount = result.preservedCount;
 
-    const saved = await updateStrategy(existingSummary.id, { nodes: result.nodes, edges: result.edges, sourceLaunchAnalysisId: exported.id });
+    // ADV-005 (owner correction #3) - "during explicit re-import, preserve
+    // manually edited product metadata... a shallow object merge is not
+    // sufficient." mergeProductMetadata only ever refreshes a field the
+    // user hasn't touched since the last import set it - see that
+    // function's own header for the exact precedence rule.
+    const mergedProductInfo = mergeProductMetadata(existingFull.productInfo, aiProductValues);
+
+    const saved = await updateStrategy(existingSummary.id, {
+      nodes: result.nodes,
+      edges: result.edges,
+      productInfo: mergedProductInfo,
+      sourceLaunchAnalysisId: exported.id,
+    });
     strategyId = saved.id;
   } else {
     // First import: nothing exists yet for this project - reconciling
@@ -92,11 +121,29 @@ export async function importLaunchStrategy(adveserProjectId, adveserProjectName)
     addedCount = result.addedCount;
     preservedCount = result.preservedCount;
 
+    // ADV-005 - starts from a genuinely EMPTY productInfo (not the
+    // ADVESER project name) so the package's own richer product name/
+    // description, when it has one, always wins on a first import; the
+    // project name is only a fallback for whatever the package itself
+    // leaves unset (e.g. a version 1 package, which has no
+    // productMetadata at all). mergeProductMetadata also starts tracking
+    // provenance for every field it fills in, from this point on.
+    const aiProductInfo = mergeProductMetadata({}, aiProductValues);
+    const finalName = aiProductInfo.name || adveserProjectName || 'Strategy from Launch Studio';
+    // The name snapshot is set unconditionally here (not just when the AI
+    // itself provided one) - on a genuine first import there is, by
+    // definition, no prior user edit to protect yet, so recording
+    // whatever name actually gets set (AI-derived or the project-name
+    // fallback) as the baseline lets a LATER re-import correctly refresh
+    // it once a real AI name becomes available, rather than freezing the
+    // fallback forever.
+    const initialProductInfo = { ...aiProductInfo, name: finalName, aiSourceSnapshot: { ...aiProductInfo.aiSourceSnapshot, name: finalName } };
+
     const saved = await createStrategy({
       name: adveserProjectName || 'Strategy from Launch Studio',
       nodes: result.nodes,
       edges: result.edges,
-      productInfo: { name: adveserProjectName || 'Strategy from Launch Studio' },
+      productInfo: initialProductInfo,
       projectId: adveserProjectId,
       sourceLaunchAnalysisId: exported.id,
     });

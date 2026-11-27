@@ -610,6 +610,13 @@ const nd = (nodeType, label, extraData = {}) => ({
   dependencies: [],
   sourceDecisionRef: null,
   locallyEdited: false,
+  // ADV-005 - the canonical channel catalog id (e.g. 'linkedin') for a
+  // 'channel' node, separate from `label` (the human-readable display
+  // name) - preserves "the distinction between channel priority and
+  // channel identity." null for every non-channel node and for any
+  // hand-created channel node, same predictable-shape convention as
+  // every other optional field here.
+  channelId: null,
   ...extraData,
 });
 
